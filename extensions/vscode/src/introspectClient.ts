@@ -125,4 +125,48 @@ export class IntrospectClient {
     const resp = await this.fetch('summarize', { database, schema, table });
     return resp.data;
   }
+
+  async tableInfo(database: string, schema: string, table: string): Promise<any[]> {
+    const resp = await this.fetch('table_info', { database, schema, table });
+    return resp.data;
+  }
+
+  async viewInfo(database: string, schema: string, table: string): Promise<any[]> {
+    const resp = await this.fetch('view_info', { database, schema, table });
+    return resp.data;
+  }
+
+  async databaseInfo(database: string): Promise<any[]> {
+    const resp = await this.fetch('database_info', { database });
+    return resp.data;
+  }
+
+  async systemFunctions(): Promise<any[]> {
+    const resp = await this.fetch('system_functions');
+    return resp.data;
+  }
+
+  async deleteSpoolFile(queryId: string): Promise<void> {
+    const url = `${this.baseUrl}/spool/delete?query_id=${encodeURIComponent(queryId)}`;
+    return new Promise((resolve, reject) => {
+      const req = http.request(url, { method: 'DELETE' }, (res) => {
+        let body = '';
+        res.on('data', (chunk: string) => { body += chunk; });
+        res.on('end', () => {
+          if (res.statusCode && res.statusCode >= 400) {
+            try {
+              reject(new Error(JSON.parse(body).error));
+            } catch {
+              reject(new Error(`HTTP ${res.statusCode}`));
+            }
+            return;
+          }
+          resolve();
+        });
+        res.on('error', reject);
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  }
 }

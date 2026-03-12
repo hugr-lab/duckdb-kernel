@@ -27,21 +27,79 @@
         {
           "id": "duckdb-explorer",
           "title": "DuckDB Explorer",
-          "icon": "$(database)"
+          "icon": "media/database.svg"
         }
       ]
     },
     "views": {
       "duckdb-explorer": [
-        {
-          "id": "duckdb.objectTree",
-          "name": "Object Tree"
-        }
+        { "id": "duckdb.session", "name": "Session" },
+        { "id": "duckdb.catalog", "name": "Catalog" },
+        { "id": "duckdb.systemFunctions", "name": "System Functions" },
+        { "id": "duckdb.extensions", "name": "Extensions" },
+        { "id": "duckdb.secrets", "name": "Secrets" },
+        { "id": "duckdb.settings", "name": "Settings" },
+        { "id": "duckdb.memory", "name": "Memory" },
+        { "id": "duckdb.resultFiles", "name": "Result Files" }
       ]
     },
     "commands": [
       {
-        "command": "duckdb.refreshExplorer",
+        "command": "duckdb.refreshCatalog",
+        "title": "Refresh Catalog",
+        "icon": "$(refresh)",
+        "category": "DuckDB"
+      },
+      {
+        "command": "duckdb.refreshExtensions",
+        "title": "Refresh Extensions",
+        "icon": "$(refresh)",
+        "category": "DuckDB"
+      },
+      {
+        "command": "duckdb.refreshSecrets",
+        "title": "Refresh Secrets",
+        "icon": "$(refresh)",
+        "category": "DuckDB"
+      },
+      {
+        "command": "duckdb.refreshSettings",
+        "title": "Refresh Settings",
+        "icon": "$(refresh)",
+        "category": "DuckDB"
+      },
+      {
+        "command": "duckdb.refreshMemory",
+        "title": "Refresh Memory",
+        "icon": "$(refresh)",
+        "category": "DuckDB"
+      },
+      {
+        "command": "duckdb.refreshResultFiles",
+        "title": "Refresh Result Files",
+        "icon": "$(refresh)",
+        "category": "DuckDB"
+      },
+      {
+        "command": "duckdb.refreshSystemFunctions",
+        "title": "Refresh System Functions",
+        "icon": "$(refresh)",
+        "category": "DuckDB"
+      },
+      {
+        "command": "duckdb.showInfo",
+        "title": "Show Info",
+        "icon": "$(info)",
+        "category": "DuckDB"
+      },
+      {
+        "command": "duckdb.deleteResultFile",
+        "title": "Delete Result File",
+        "icon": "$(trash)",
+        "category": "DuckDB"
+      },
+      {
+        "command": "duckdb.refreshNode",
         "title": "Refresh",
         "icon": "$(refresh)",
         "category": "DuckDB"
@@ -50,9 +108,56 @@
     "menus": {
       "view/title": [
         {
-          "command": "duckdb.refreshExplorer",
-          "when": "view == duckdb.objectTree",
+          "command": "duckdb.refreshCatalog",
+          "when": "view == duckdb.catalog",
           "group": "navigation"
+        },
+        {
+          "command": "duckdb.refreshExtensions",
+          "when": "view == duckdb.extensions",
+          "group": "navigation"
+        },
+        {
+          "command": "duckdb.refreshSecrets",
+          "when": "view == duckdb.secrets",
+          "group": "navigation"
+        },
+        {
+          "command": "duckdb.refreshSettings",
+          "when": "view == duckdb.settings",
+          "group": "navigation"
+        },
+        {
+          "command": "duckdb.refreshMemory",
+          "when": "view == duckdb.memory",
+          "group": "navigation"
+        },
+        {
+          "command": "duckdb.refreshResultFiles",
+          "when": "view == duckdb.resultFiles",
+          "group": "navigation"
+        },
+        {
+          "command": "duckdb.refreshSystemFunctions",
+          "when": "view == duckdb.systemFunctions",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "duckdb.refreshNode",
+          "when": "viewItem == database || viewItem == schema || viewItem == category",
+          "group": "inline@1"
+        },
+        {
+          "command": "duckdb.showInfo",
+          "when": "viewItem == table || viewItem == view || viewItem == database || viewItem == secret || viewItem == extension || viewItem == function || viewItem == function_group",
+          "group": "inline@2"
+        },
+        {
+          "command": "duckdb.deleteResultFile",
+          "when": "viewItem == spool_file",
+          "group": "inline@2"
         }
       ]
     }

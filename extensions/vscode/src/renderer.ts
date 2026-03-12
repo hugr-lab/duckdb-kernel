@@ -139,12 +139,18 @@ function loadPerspective(baseUrl: string): Promise<any> {
   _perspectiveBaseUrl = baseUrl;
   const staticBase = `${baseUrl}/static/perspective`;
   _perspectiveReady = (async () => {
-    const [perspective] = await Promise.all([
-      import(/* webpackIgnore: true */ `${staticBase}/perspective.js`),
-      import(/* webpackIgnore: true */ `${staticBase}/perspective-viewer.js`),
-      import(/* webpackIgnore: true */ `${staticBase}/perspective-viewer-datagrid.js`),
-      import(/* webpackIgnore: true */ `${staticBase}/perspective-viewer-d3fc.js`),
-    ]);
+    let perspective: any;
+    const alreadyLoaded = customElements.get('perspective-viewer') !== undefined;
+    if (alreadyLoaded) {
+      perspective = await import(/* webpackIgnore: true */ `${staticBase}/perspective.js`);
+    } else {
+      [perspective] = await Promise.all([
+        import(/* webpackIgnore: true */ `${staticBase}/perspective.js`),
+        import(/* webpackIgnore: true */ `${staticBase}/perspective-viewer.js`),
+        import(/* webpackIgnore: true */ `${staticBase}/perspective-viewer-datagrid.js`),
+        import(/* webpackIgnore: true */ `${staticBase}/perspective-viewer-d3fc.js`),
+      ]);
+    }
     // Fetch and inject theme CSS inline (VS Code webview CSP may block <link>).
     const themeTag = 'hugr-perspective-themes';
     if (!document.getElementById(themeTag)) {
