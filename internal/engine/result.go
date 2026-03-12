@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -109,9 +110,9 @@ func formatValue(col arrow.Array, idx int) string {
 	case *array.Float64:
 		return fmt.Sprintf("%g", c.Value(idx))
 	case *array.String:
-		return c.Value(idx)
+		return strings.Clone(c.Value(idx))
 	case *array.LargeString:
-		return c.Value(idx)
+		return strings.Clone(c.Value(idx))
 	case *array.Boolean:
 		return fmt.Sprintf("%t", c.Value(idx))
 	case *array.Date32:

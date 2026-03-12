@@ -5,6 +5,7 @@ Run: python -m pytest tests/integration_test.py -v
 """
 
 import os
+import tempfile
 import time
 
 import jupyter_client
@@ -183,7 +184,7 @@ class TestArrowSpool:
         """Query results should produce Arrow IPC files in the spool directory."""
         displays, errors, _ = execute(kernel, "SELECT 1 AS val")
         assert not errors
-        spool_base = "/tmp/duckdb-kernel"
+        spool_base = os.path.join(tempfile.gettempdir(), "duckdb-kernel")
         assert os.path.exists(spool_base), f"Spool directory not found: {spool_base}"
         sessions = os.listdir(spool_base)
         assert len(sessions) > 0, "No session directories in spool"
