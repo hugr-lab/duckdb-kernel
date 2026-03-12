@@ -1,4 +1,5 @@
 const CopyPlugin = require('copy-webpack-plugin');
+const TerserPlugin = require('terser-webpack-plugin');
 const path = require('path');
 
 const PSP = path.resolve(__dirname, 'node_modules', '@perspective-dev');
@@ -35,6 +36,14 @@ function pspAsset(from, name) {
 }
 
 module.exports = {
+  optimization: {
+    minimizer: [
+      new TerserPlugin({
+        // Perspective CDN files are pre-built and contain syntax Terser cannot parse
+        exclude: /perspective\//,
+      }),
+    ],
+  },
   plugins: [
     new CopyPlugin({
       patterns: [
