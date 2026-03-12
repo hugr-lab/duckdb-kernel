@@ -7,13 +7,20 @@ KERNEL_DIR := $(HOME)/Library/Jupyter/kernels/duckdb
 build:
 	go build -tags $(BUILD_TAGS) -o $(BINARY) ./cmd/duckdb-kernel
 
-install: build
+install: build copy-perspective
 	mkdir -p $(KERNEL_DIR)
 	ln -sf $(CURDIR)/$(BINARY) $(KERNEL_DIR)/$(BINARY)
 	cp kernel/kernel.json $(KERNEL_DIR)/kernel.json
 	@# Update kernel.json to use absolute path
 	@sed -i'' -e 's|"duckdb-kernel"|"$(KERNEL_DIR)/$(BINARY)"|' $(KERNEL_DIR)/kernel.json
+	@# Symlink perspective static files next to binary
+	@ln -sfn $(CURDIR)/static $(KERNEL_DIR)/static
 	@echo "Kernel installed to $(KERNEL_DIR)"
+
+copy-perspective:
+	@mkdir -p static/perspective
+	@cp extensions/jupyterlab/hugr_perspective/labextension/static/perspective/* static/perspective/ 2>/dev/null || true
+	@echo "Perspective static files copied to static/perspective/"
 
 test: install
 	@cd tests && pip install -q -r requirements.txt pytest && \

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/apache/arrow-go/v18/arrow/ipc"
@@ -18,6 +19,7 @@ import (
 const maxArrowRows = 5_000_000
 
 // ArrowServer serves Arrow IPC files over HTTP directly from the spool.
+// Also serves static assets (perspective JS/WASM) for VS Code renderer.
 type ArrowServer struct {
 	spool    *spool.Spool
 	listener net.Listener
@@ -39,6 +41,17 @@ func NewArrowServer(sp *spool.Spool) (*ArrowServer, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/arrow", as.handleArrow)
 	mux.HandleFunc("/arrow/stream", as.handleArrowStream)
+
+	// Serve perspective static files if available.
+	// Look next to the binary: <binary_dir>/static/perspective/
+	if exePath, err := os.Executable(); err == nil {
+		staticDir := filepath.Join(filepath.Dir(exePath), "static", "perspective")
+		if info, err := os.Stat(staticDir); err == nil && info.IsDir() {
+			fs := http.StripPrefix("/static/perspective/", http.FileServer(http.Dir(staticDir)))
+			mux.Handle("/static/perspective/", addCORS(fs))
+			log.Printf("Serving perspective static files from %s", staticDir)
+		}
+	}
 
 	as.server = &http.Server{Handler: mux}
 
@@ -203,6 +216,19 @@ func (as *ArrowServer) streamRawFile(w http.ResponseWriter, path string) {
 	if _, err := io.Copy(w, f); err != nil {
 		log.Printf("arrow: copy error: %v", err)
 	}
+}
+
+// BaseURL returns the base URL of the Arrow HTTP server.
+func (as *ArrowServer) BaseURL() string {
+	return fmt.Sprintf("http://127.0.0.1:%d", as.Port())
+}
+
+// addCORS wraps an http.Handler to add CORS headers.
+func addCORS(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		h.ServeHTTP(w, r)
+	})
 }
 
 // ArrowURL returns the URL for fetching the given query's Arrow data.

@@ -181,10 +181,11 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 			runtime.ReadMemStats(&memStats)
 
 			data["application/vnd.hugr.result+json"] = map[string]any{
-				"query_id":   result.QueryID,
-				"arrow_url":  k.arrowServer.ArrowURL(result.QueryID, result.TotalRows),
-				"rows":       result.TotalRows,
-				"columns":    colDefs,
+				"query_id":      result.QueryID,
+				"arrow_url":     k.arrowServer.ArrowURL(result.QueryID, result.TotalRows),
+				"base_url":      k.arrowServer.BaseURL(),
+				"rows":          result.TotalRows,
+				"columns":       colDefs,
 				"kernel_mem_mb": memStats.Sys / 1024 / 1024,
 			}
 		}

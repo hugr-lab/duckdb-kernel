@@ -39,5 +39,8 @@ hugr_perspective/labextension/
 # VS Code extension output
 extensions/vscode/out/
 
+# Generated static files (perspective)
+static/
+
 # Environment
 .env*
