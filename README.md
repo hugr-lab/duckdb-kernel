@@ -1,5 +1,9 @@
 # DuckDB Kernel
 
+[![CI](https://github.com/hugr-lab/duckdb-kernel/actions/workflows/ci.yml/badge.svg)](https://github.com/hugr-lab/duckdb-kernel/actions/workflows/ci.yml)
+[![Release](https://github.com/hugr-lab/duckdb-kernel/actions/workflows/release.yml/badge.svg)](https://github.com/hugr-lab/duckdb-kernel/actions/workflows/release.yml)
+[![PyPI](https://img.shields.io/pypi/v/hugr-perspective-viewer)](https://pypi.org/project/hugr-perspective-viewer/)
+
 A Jupyter-compatible kernel implemented in Go that provides a SQL execution environment backed by DuckDB.
 
 ## Features
@@ -79,15 +83,23 @@ jupyter lab
 
 The DuckDB Kernel emits result metadata via a custom MIME type (`application/vnd.hugr.result+json`) alongside plain text output. When paired with the Perspective viewer extension, query results render as interactive visualizations.
 
-### Install the JupyterLab Extension
+### JupyterLab Extension
 
 ```bash
 pip install hugr-perspective-viewer
 ```
 
-### Install the VS Code Extension
+### VS Code Extension
 
-Install the **HUGR Result Viewer** extension from the VS Code marketplace.
+Download `hugr-result-renderer.vsix` from the [latest release](https://github.com/hugr-lab/duckdb-kernel/releases/latest) and install it:
+
+```bash
+code --install-extension hugr-result-renderer.vsix
+```
+
+### Perspective Static Files (install.sh)
+
+The `install.sh` script automatically downloads Perspective static files (JS/WASM) alongside the kernel binary. These enable the built-in result viewer without requiring additional extension installs.
 
 ### Capabilities
 
@@ -109,6 +121,39 @@ Query results are automatically written as Arrow IPC files to:
 ```
 
 Cleanup policy: last 5 results retained, files older than 1 hour removed.
+
+## Development
+
+### Building Extensions Locally
+
+**JupyterLab extension:**
+
+```bash
+cd extensions/jupyterlab
+jlpm install
+jlpm build        # dev build
+jlpm build:prod   # production build
+```
+
+**VS Code extension:**
+
+```bash
+cd extensions/vscode
+npm install
+npm run build
+npx @vscode/vsce package --no-dependencies -o hugr-result-renderer.vsix
+```
+
+### CI & Release
+
+CI runs three parallel jobs on every push/PR: kernel build + integration tests, JupyterLab extension build, and VS Code extension build.
+
+On release tags (`v*`), the release workflow:
+- Builds kernel binaries for linux/amd64, linux/arm64, darwin/arm64, windows/amd64
+- Builds and publishes the JupyterLab extension to PyPI
+- Packages the VS Code extension as `.vsix`
+- Bundles Perspective static files as `perspective-static.tar.gz`
+- Creates a GitHub Release with all artifacts
 
 ## License
 
