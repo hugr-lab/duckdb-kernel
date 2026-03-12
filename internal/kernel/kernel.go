@@ -35,6 +35,7 @@ type Kernel struct {
 	connInfo     *ConnectionInfo
 	session      *session.Session
 	spool        *spool.Spool
+	arrowServer  *ArrowServer
 	metaRegistry *meta.Registry
 	key          []byte
 
@@ -89,6 +90,16 @@ func (k *Kernel) Start(ctx context.Context) error {
 		return fmt.Errorf("listen stdin: %w", err)
 	}
 
+	// Start Arrow HTTP server for direct file serving.
+	if k.spool != nil {
+		as, err := NewArrowServer(k.spool)
+		if err != nil {
+			log.Printf("Warning: failed to start Arrow HTTP server: %v", err)
+		} else {
+			k.arrowServer = as
+		}
+	}
+
 	log.Printf("DuckDB Kernel started on %s://%s", k.connInfo.Transport, k.connInfo.IP)
 
 	// Start heartbeat goroutine
@@ -117,6 +128,9 @@ func (k *Kernel) Shutdown() {
 }
 
 func (k *Kernel) close() error {
+	if k.arrowServer != nil {
+		k.arrowServer.Close()
+	}
 	if k.spool != nil {
 		if err := k.spool.Destroy(); err != nil {
 			log.Printf("spool destroy error: %v", err)

@@ -23,5 +23,21 @@ Thumbs.db
 *.ipynb
 .venv/
 
+# Node.js / TypeScript (extensions)
+node_modules/
+dist/
+build/
+lib/
+*.log
+
+# Python (extensions packaging)
+__pycache__/
+*.pyc
+*.egg-info/
+hugr_perspective/labextension/
+
+# VS Code extension output
+extensions/vscode/out/
+
 # Environment
 .env*

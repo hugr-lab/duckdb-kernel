@@ -75,6 +75,31 @@ export DUCKDB_SHARED_SESSION=my-analysis
 jupyter lab
 ```
 
+## Perspective Viewer (Interactive Visualization)
+
+The DuckDB Kernel emits result metadata via a custom MIME type (`application/vnd.hugr.result+json`) alongside plain text output. When paired with the Perspective viewer extension, query results render as interactive visualizations.
+
+### Install the JupyterLab Extension
+
+```bash
+pip install hugr-perspective-viewer
+```
+
+### Install the VS Code Extension
+
+Install the **HUGR Result Viewer** extension from the VS Code marketplace.
+
+### Capabilities
+
+- **Interactive table**: sort, filter, and scroll through results
+- **Pivot tables**: group by rows and columns with aggregations (sum, count, average)
+- **Charts**: bar, line, and scatter visualizations
+- **Large datasets**: up to 1M rows without blocking the UI (data loaded from Arrow files)
+
+The viewer loads data directly from Arrow IPC files — large datasets are never transmitted through the Jupyter protocol.
+
+Environments without the extension installed continue to display plain text ASCII tables.
+
 ## Arrow Result Files
 
 Query results are automatically written as Arrow IPC files to:

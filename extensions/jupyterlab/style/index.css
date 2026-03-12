@@ -1,0 +1,64 @@
+/* Styles for the HUGR Perspective Viewer widget. */
+
+.hugr-result-viewer {
+  width: 100%;
+  min-height: 400px;
+  display: block;
+}
+
+.hugr-result-viewer perspective-viewer {
+  width: 100%;
+  min-height: 400px;
+  display: block;
+}
+
+.hugr-result-loading {
+  padding: 12px 16px;
+  color: var(--jp-ui-font-color2, #666);
+  font-family: var(--jp-ui-font-family, sans-serif);
+  font-size: var(--jp-ui-font-size1, 13px);
+}
+
+.hugr-result-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  margin-bottom: 4px;
+  background: var(--jp-warn-color3, #fff3e0);
+  border: 1px solid var(--jp-warn-color2, #ffcc80);
+  border-radius: 4px;
+  font-family: var(--jp-ui-font-family, sans-serif);
+  font-size: var(--jp-ui-font-size1, 13px);
+  color: var(--jp-ui-font-color1, #333);
+}
+
+.hugr-result-load-all {
+  padding: 4px 12px;
+  border: 1px solid var(--jp-border-color1, #ccc);
+  border-radius: 3px;
+  background: var(--jp-layout-color1, #fff);
+  color: var(--jp-ui-font-color1, #333);
+  font-size: var(--jp-ui-font-size1, 13px);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hugr-result-load-all:hover {
+  background: var(--jp-layout-color2, #f0f0f0);
+}
+
+.hugr-result-load-all:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.hugr-result-error {
+  padding: 12px 16px;
+  color: var(--jp-error-color1, #d32f2f);
+  background: var(--jp-error-color3, #fce4ec);
+  border: 1px solid var(--jp-error-color2, #ef9a9a);
+  border-radius: 4px;
+  font-family: var(--jp-ui-font-family, sans-serif);
+  font-size: var(--jp-ui-font-size1, 13px);
+}

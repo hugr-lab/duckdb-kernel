@@ -19,20 +19,17 @@ type QueryResult struct {
 	Columns   []ColumnMeta
 	Rows      [][]string
 	TotalRows int64
-	Records   []arrow.Record
+	NumChunks int
 }
 
-// Release releases all Arrow records held by the result.
-func (r *QueryResult) Release() {
-	for _, rec := range r.Records {
-		rec.Release()
-	}
-	r.Records = nil
-}
-
-// BuildFromReader reads all record batches from a reader and builds
-// the preview rows up to the given limit.
-func BuildFromReader(reader array.RecordReader, limit int) (*QueryResult, error) {
+// BuildPreviewFromReader reads record batches, builds preview rows,
+// and streams each batch to the provided callback without accumulating
+// all records in memory.
+func BuildPreviewFromReader(
+	reader array.RecordReader,
+	previewLimit int,
+	onBatch func(rec arrow.Record) error,
+) (*QueryResult, error) {
 	if reader == nil {
 		return &QueryResult{}, nil
 	}
@@ -40,7 +37,7 @@ func BuildFromReader(reader array.RecordReader, limit int) (*QueryResult, error)
 	result := &QueryResult{}
 	schema := reader.Schema()
 
-	// Extract column metadata
+	// Extract column metadata.
 	result.Columns = make([]ColumnMeta, schema.NumFields())
 	for i, field := range schema.Fields() {
 		result.Columns[i] = ColumnMeta{
@@ -49,18 +46,15 @@ func BuildFromReader(reader array.RecordReader, limit int) (*QueryResult, error)
 		}
 	}
 
-	// Read all record batches
 	previewFull := false
 	for reader.Next() {
 		rec := reader.Record()
-		rec.Retain()
-		result.Records = append(result.Records, rec)
 		result.TotalRows += rec.NumRows()
 
-		// Build preview rows
+		// Build preview rows from first batches.
 		if !previewFull {
 			for rowIdx := int64(0); rowIdx < rec.NumRows(); rowIdx++ {
-				if len(result.Rows) >= limit {
+				if len(result.Rows) >= previewLimit {
 					previewFull = true
 					break
 				}
@@ -71,10 +65,16 @@ func BuildFromReader(reader array.RecordReader, limit int) (*QueryResult, error)
 				result.Rows = append(result.Rows, row)
 			}
 		}
+
+		// Stream batch to writer (spool).
+		if onBatch != nil {
+			if err := onBatch(rec); err != nil {
+				return nil, fmt.Errorf("batch callback: %w", err)
+			}
+		}
 	}
 
 	if err := reader.Err(); err != nil {
-		result.Release()
 		return nil, fmt.Errorf("reading records: %w", err)
 	}
 
