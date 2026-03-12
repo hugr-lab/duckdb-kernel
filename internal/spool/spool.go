@@ -103,8 +103,9 @@ func (s *Spool) OpenReader(queryID string) (*ipc.Reader, io.Closer, error) {
 }
 
 // Path returns the Arrow IPC file path for a given query ID.
+// Uses filepath.Base to prevent path traversal attacks.
 func (s *Spool) Path(queryID string) string {
-	return filepath.Join(s.Dir, queryID+".arrow")
+	return filepath.Join(s.Dir, filepath.Base(queryID)+".arrow")
 }
 
 // Cleanup removes files exceeding the max count and max age limits.

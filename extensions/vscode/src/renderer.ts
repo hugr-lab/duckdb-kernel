@@ -66,7 +66,11 @@ async function streamArrowToTable(
     throw new Error(`Failed to fetch Arrow data (HTTP ${response.status})`);
   }
 
-  const reader = response.body!.getReader();
+  if (!response.body) {
+    throw new Error('Response body is null');
+  }
+
+  const reader = response.body.getReader();
   let buffer = new Uint8Array(0);
   let table: any = null;
 
@@ -80,7 +84,7 @@ async function streamArrowToTable(
         buffer = concatBuffers(buffer, value);
       }
 
-      const view = new DataView(buffer.buffer, buffer.byteOffset, 4);
+      const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
       const chunkLen = view.getUint32(0, true);
       if (chunkLen === 0) break;
 
@@ -88,6 +92,11 @@ async function streamArrowToTable(
         const { done, value } = await reader.read();
         if (done) break;
         buffer = concatBuffers(buffer, value);
+      }
+
+      // Verify we got the complete chunk.
+      if (buffer.length < 4 + chunkLen) {
+        break; // Incomplete chunk — stream ended prematurely.
       }
 
       const chunk = buffer.slice(4, 4 + chunkLen);
@@ -141,6 +150,10 @@ function loadPerspective(baseUrl: string): Promise<any> {
     await customElements.whenDefined('perspective-viewer');
     return perspective;
   })();
+  _perspectiveReady.catch(() => {
+    _perspectiveReady = null;
+    _perspectiveBaseUrl = null;
+  });
   return _perspectiveReady;
 }
 
@@ -151,8 +164,10 @@ export const activate: ActivationFunction = (_context) => {
     async renderOutputItem(data, element) {
       const metadata = data.json() as ResultMetadata;
       if (!metadata || !metadata.arrow_url) {
-        element.innerHTML =
-          '<div style="color: var(--vscode-errorForeground);">No result metadata available.</div>';
+        const div = document.createElement('div');
+        div.style.color = 'var(--vscode-errorForeground)';
+        div.textContent = 'No result metadata available.';
+        element.replaceChildren(div);
         return;
       }
 
@@ -217,7 +232,10 @@ async function renderViewer(
       const banner = document.createElement('div');
       banner.style.cssText =
         'display: flex; align-items: center; gap: 12px; padding: 4px 8px; font-size: 12px; color: var(--vscode-descriptionForeground); border-bottom: 1px solid var(--vscode-panel-border);';
-      banner.innerHTML = `<span>${statusParts.join(' \u00b7 ')}</span>`;
+
+      const span = document.createElement('span');
+      span.textContent = statusParts.join(' \u00b7 ');
+      banner.appendChild(span);
 
       if (truncation.truncated) {
         const btn = document.createElement('button');
@@ -229,6 +247,7 @@ async function renderViewer(
           btn.textContent = 'Loading...';
           btn.style.opacity = '0.6';
           const newController = new AbortController();
+          abortControllers.set('load-all', newController);
           renderViewer(element, metadata, buildFullUrl(arrowUrl), newController.signal);
         });
         banner.appendChild(btn);
@@ -253,6 +272,9 @@ async function renderViewer(
     await (viewer as any).load(table);
   } catch (err: any) {
     if (signal.aborted) return;
-    element.innerHTML = `<div style="color: var(--vscode-errorForeground); padding: 8px;">Failed to initialize viewer: ${err?.message || 'Unknown error'}</div>`;
+    const div = document.createElement('div');
+    div.style.cssText = 'color: var(--vscode-errorForeground); padding: 8px;';
+    div.textContent = `Failed to initialize viewer: ${err?.message || 'Unknown error'}`;
+    element.replaceChildren(div);
   }
 }

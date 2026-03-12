@@ -135,7 +135,6 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Transfer-Encoding", "chunked")
 
 	flusher, canFlush := w.(http.Flusher)
 	schema := reader.Schema()
@@ -180,8 +179,12 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 		chunk := buf.Bytes()
 		lenBuf := make([]byte, 4)
 		binary.LittleEndian.PutUint32(lenBuf, uint32(len(chunk)))
-		w.Write(lenBuf)
-		w.Write(chunk)
+		if _, err := w.Write(lenBuf); err != nil {
+			break // Client disconnected.
+		}
+		if _, err := w.Write(chunk); err != nil {
+			break
+		}
 
 		if canFlush {
 			flusher.Flush()

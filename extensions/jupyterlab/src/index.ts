@@ -11,7 +11,7 @@ import { HugrResultWidget } from './widget.js';
 const MIME_TYPE = 'application/vnd.hugr.result+json';
 
 const rendererFactory: IRenderMime.IRendererFactory = {
-  safe: true,
+  safe: false,
   mimeTypes: [MIME_TYPE],
   createRenderer: (options: IRenderMime.IRendererOptions) =>
     new HugrResultWidget(options),

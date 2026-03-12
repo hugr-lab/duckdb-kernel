@@ -184,12 +184,12 @@ class TestArrowSpool:
         displays, errors, _ = execute(kernel, "SELECT 1 AS val")
         assert not errors
         spool_base = "/tmp/duckdb-kernel"
-        if os.path.exists(spool_base):
-            sessions = os.listdir(spool_base)
-            if sessions:
-                session_dir = os.path.join(spool_base, sessions[0])
-                arrow_files = [f for f in os.listdir(session_dir) if f.endswith(".arrow")]
-                assert len(arrow_files) > 0, "Expected at least one .arrow file in spool"
+        assert os.path.exists(spool_base), f"Spool directory not found: {spool_base}"
+        sessions = os.listdir(spool_base)
+        assert len(sessions) > 0, "No session directories in spool"
+        session_dir = os.path.join(spool_base, sessions[0])
+        arrow_files = [f for f in os.listdir(session_dir) if f.endswith(".arrow")]
+        assert len(arrow_files) > 0, "Expected at least one .arrow file in spool"
 
 
 class TestMimeTypeEmission:
@@ -207,12 +207,12 @@ class TestMimeTypeEmission:
         )
 
     def test_mime_metadata_schema(self, kernel):
-        """MIME metadata should contain query_id, arrow_path, rows, columns."""
+        """MIME metadata should contain query_id, arrow_url, rows, columns."""
         _, errors, mime_data = execute(kernel, "SELECT 1 AS id, 'hello' AS name")
         assert not errors
         meta = mime_data[0][self.MIME_TYPE]
         assert "query_id" in meta
-        assert "arrow_path" in meta
+        assert "arrow_url" in meta
         assert "rows" in meta
         assert "columns" in meta
         assert meta["rows"] == 1
@@ -220,14 +220,14 @@ class TestMimeTypeEmission:
         assert meta["columns"][0]["name"] == "id"
         assert meta["columns"][1]["name"] == "name"
 
-    def test_mime_arrow_path_exists(self, kernel):
-        """Arrow file referenced in MIME metadata should exist on disk."""
+    def test_mime_arrow_url_format(self, kernel):
+        """Arrow URL in MIME metadata should point to kernel HTTP server."""
         _, errors, mime_data = execute(kernel, "SELECT 100 AS val")
         assert not errors
         meta = mime_data[0][self.MIME_TYPE]
-        arrow_path = meta["arrow_path"]
-        assert arrow_path.endswith(".arrow")
-        assert os.path.isfile(arrow_path), f"Arrow file not found: {arrow_path}"
+        arrow_url = meta["arrow_url"]
+        assert "127.0.0.1" in arrow_url, f"Expected localhost URL, got: {arrow_url}"
+        assert "/arrow" in arrow_url, f"Expected /arrow endpoint, got: {arrow_url}"
 
     def test_plain_text_always_present(self, kernel):
         """text/plain should always be present alongside custom MIME type."""

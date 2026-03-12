@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"runtime"
 	"strings"
 
@@ -133,6 +134,7 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 	if err != nil {
 		if sw != nil {
 			sw.Close()
+			os.Remove(k.spool.Path(queryID))
 		}
 		k.sendExecuteError(msg, execCount, err)
 		return
@@ -145,6 +147,8 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 		}
 		if result.TotalRows > 0 {
 			result.QueryID = queryID
+		} else {
+			os.Remove(k.spool.Path(queryID))
 		}
 		if err := k.spool.Cleanup(); err != nil {
 			log.Printf("spool cleanup error: %v", err)
@@ -205,7 +209,7 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 	reply := NewMessage(msg, "execute_reply")
 	reply.Content = map[string]any{
 		"status":          "ok",
-		"execution_count": k.session.ExecutionCount(),
+		"execution_count": execCount,
 	}
 	if err := k.sendMessage(k.shellSocket, reply); err != nil {
 		log.Printf("send execute_reply error: %v", err)

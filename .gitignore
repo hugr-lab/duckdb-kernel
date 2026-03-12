@@ -25,9 +25,9 @@ Thumbs.db
 
 # Node.js / TypeScript (extensions)
 node_modules/
-dist/
-build/
-lib/
+extensions/jupyterlab/lib/
+extensions/jupyterlab/.yarn/cache/
+extensions/jupyterlab/.yarn/install-state.gz
 *.log
 
 # Python (extensions packaging)

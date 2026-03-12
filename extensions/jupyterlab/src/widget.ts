@@ -1,9 +1,8 @@
 /**
  * Perspective viewer widget for HUGR result metadata.
  *
- * Fetches Arrow IPC data from Go kernel's HTTP server and loads
- * it into Perspective in a single call to avoid WASM overhead
- * from many small table.update() calls.
+ * Streams Arrow IPC data from Go kernel's HTTP server chunk-by-chunk
+ * into a Perspective table.
  */
 
 import { IRenderMime } from '@jupyterlab/rendermime-interfaces';
@@ -45,6 +44,9 @@ function loadPerspective(): Promise<any> {
     await customElements.whenDefined('perspective-viewer');
     return perspective;
   })();
+  _perspectiveReady.catch(() => {
+    _perspectiveReady = null;
+  });
   return _perspectiveReady;
 }
 
@@ -85,9 +87,6 @@ function buildFullUrl(arrowUrl: string): string {
  * Stream length-prefixed Arrow IPC chunks from the Go server into a
  * Perspective table. Each chunk is [4-byte LE length][Arrow IPC bytes].
  * Stream ends with a zero-length marker.
- *
- * Creates the table from the first chunk, then updates with subsequent ones.
- * Supports AbortController to cancel mid-stream on dispose/reload.
  */
 async function streamArrowToTable(
   arrowUrl: string,
@@ -99,7 +98,11 @@ async function streamArrowToTable(
     throw new Error(`Failed to fetch Arrow data (HTTP ${response.status})`);
   }
 
-  const reader = response.body!.getReader();
+  if (!response.body) {
+    throw new Error('Response body is null');
+  }
+
+  const reader = response.body.getReader();
   let buffer = new Uint8Array(0);
   let table: any = null;
 
@@ -115,7 +118,7 @@ async function streamArrowToTable(
       }
 
       // Read chunk length (little-endian uint32).
-      const view = new DataView(buffer.buffer, buffer.byteOffset, 4);
+      const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
       const chunkLen = view.getUint32(0, true);
 
       // Zero length = end of stream.
@@ -126,6 +129,11 @@ async function streamArrowToTable(
         const { done, value } = await reader.read();
         if (done) break;
         buffer = concatBuffers(buffer, value);
+      }
+
+      // Verify we got the complete chunk.
+      if (buffer.length < 4 + chunkLen) {
+        break; // Incomplete chunk — stream ended prematurely.
       }
 
       // Extract the Arrow IPC chunk.
@@ -207,7 +215,10 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       if (statusParts.length > 0 || truncation.truncated) {
         const banner = document.createElement('div');
         banner.className = 'hugr-result-banner';
-        banner.innerHTML = `<span>${statusParts.join(' · ')}</span>`;
+
+        const span = document.createElement('span');
+        span.textContent = statusParts.join(' \u00b7 ');
+        banner.appendChild(span);
 
         if (truncation.truncated) {
           const btn = document.createElement('button');
@@ -257,15 +268,25 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       }
       this._table = null;
     }
-    this._client = null;
+    if (this._client) {
+      try {
+        await this._client.terminate();
+      } catch {
+        // Ignore cleanup errors.
+      }
+      this._client = null;
+    }
   }
 
-  async dispose(): Promise<void> {
-    await this._cleanup();
+  dispose(): void {
+    void this._cleanup();
     super.dispose();
   }
 
   private _showError(message: string): void {
-    this.node.innerHTML = `<div class="hugr-result-error">${message}</div>`;
+    const div = document.createElement('div');
+    div.className = 'hugr-result-error';
+    div.textContent = message;
+    this.node.replaceChildren(div);
   }
 }
