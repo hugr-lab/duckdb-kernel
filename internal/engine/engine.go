@@ -30,8 +30,21 @@ func (a *arrowConn) Close() error {
 	return a.drv.Close()
 }
 
+// connReader wraps an Arrow RecordReader and closes the underlying
+// connection when the reader is released.
+type connReader struct {
+	array.RecordReader
+	conn *arrowConn
+}
+
+func (r *connReader) Release() {
+	r.RecordReader.Release()
+	r.conn.Close()
+}
+
 // Execute runs a SQL query and returns an Arrow RecordReader.
-// The caller is responsible for releasing the reader.
+// The caller must call Release() on the returned reader, which
+// also closes the underlying DuckDB connection.
 func (e *Engine) Execute(ctx context.Context, query string) (array.RecordReader, error) {
 	conn, err := e.connector.Connect(ctx)
 	if err != nil {
@@ -52,10 +65,7 @@ func (e *Engine) Execute(ctx context.Context, query string) (array.RecordReader,
 		return nil, fmt.Errorf("query: %w", err)
 	}
 
-	// Note: the connection stays open while the reader is being consumed.
-	// The caller must release the reader. Connection cleanup happens via
-	// the session's connection pool.
-	return reader, nil
+	return &connReader{RecordReader: reader, conn: ac}, nil
 }
 
 // Close closes the engine (no-op, connector is managed externally).

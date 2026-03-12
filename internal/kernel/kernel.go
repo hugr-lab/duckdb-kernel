@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 
 	zmq "github.com/go-zeromq/zmq4"
 	"github.com/hugr-lab/duckdb-kernel/internal/meta"
@@ -43,7 +44,8 @@ type Kernel struct {
 	stdinSocket   zmq.Socket
 	hbSocket      zmq.Socket
 
-	shutdown chan struct{}
+	shutdown     chan struct{}
+	shutdownOnce sync.Once
 }
 
 // NewKernel creates a new kernel with the given connection info, session, and spool.
@@ -109,10 +111,9 @@ func (k *Kernel) Start(ctx context.Context) error {
 
 // Shutdown signals the kernel to stop.
 func (k *Kernel) Shutdown() {
-	select {
-	case k.shutdown <- struct{}{}:
-	default:
-	}
+	k.shutdownOnce.Do(func() {
+		close(k.shutdown)
+	})
 }
 
 func (k *Kernel) close() error {
@@ -165,14 +166,14 @@ func (k *Kernel) shellLoop(ctx context.Context) {
 			}
 		}
 
-		msg, err := Deserialize(zmqMsg.Frames)
-		if err != nil {
-			log.Printf("shell deserialize error: %v", err)
+		if !VerifySignature(k.key, zmqMsg.Frames) {
+			log.Printf("shell: invalid signature, dropping message")
 			continue
 		}
 
-		if !VerifySignature(k.key, zmqMsg.Frames) {
-			log.Printf("shell: invalid signature for %s", msg.Header.MsgType)
+		msg, err := Deserialize(zmqMsg.Frames)
+		if err != nil {
+			log.Printf("shell deserialize error: %v", err)
 			continue
 		}
 
@@ -193,6 +194,11 @@ func (k *Kernel) controlLoop(ctx context.Context) {
 				log.Printf("control recv error: %v", err)
 				return
 			}
+		}
+
+		if !VerifySignature(k.key, zmqMsg.Frames) {
+			log.Printf("control: invalid signature, dropping message")
+			continue
 		}
 
 		msg, err := Deserialize(zmqMsg.Frames)

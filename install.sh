@@ -64,12 +64,13 @@ curl -fSL -o "${KERNEL_DIR}/kernel.json" "$KERNEL_JSON_URL"
 # Patch kernel.json with absolute path
 BINARY_PATH="${KERNEL_DIR}/duckdb-kernel${SUFFIX}"
 if command -v python3 &>/dev/null; then
-    python3 -c "
-import json, sys
-with open('${KERNEL_DIR}/kernel.json') as f:
+    KERNEL_JSON="${KERNEL_DIR}/kernel.json" KERNEL_BINARY="${BINARY_PATH}" python3 -c "
+import json, os
+path = os.environ['KERNEL_JSON']
+with open(path) as f:
     spec = json.load(f)
-spec['argv'][0] = '${BINARY_PATH}'
-with open('${KERNEL_DIR}/kernel.json', 'w') as f:
+spec['argv'][0] = os.environ['KERNEL_BINARY']
+with open(path, 'w') as f:
     json.dump(spec, f, indent=2)
 "
 else

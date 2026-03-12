@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -26,6 +27,11 @@ type Spool struct {
 
 // NewSpool creates a new result spool for the given session.
 func NewSpool(sessionID string) (*Spool, error) {
+	// Sanitize session ID to prevent path traversal
+	sessionID = filepath.Base(sessionID)
+	if sessionID == "." || sessionID == ".." || strings.ContainsAny(sessionID, `/\`) {
+		return nil, fmt.Errorf("invalid session ID: %q", sessionID)
+	}
 	dir := filepath.Join(os.TempDir(), "duckdb-kernel", sessionID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create spool dir: %w", err)
