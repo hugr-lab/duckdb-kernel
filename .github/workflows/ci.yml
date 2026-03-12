@@ -16,11 +16,8 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            kernel_dir: ~/Library/Jupyter/kernels/duckdb
           - os: ubuntu-latest
-            kernel_dir: ~/.local/share/jupyter/kernels/duckdb
           - os: windows-latest
-            kernel_dir: $APPDATA/jupyter/kernels/duckdb
 
     runs-on: ${{ matrix.os }}
 
@@ -43,16 +40,25 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install kernel (unix)
-        if: runner.os != 'Windows'
+      - name: Install kernel (macOS)
+        if: runner.os == 'macOS'
         run: |
-          KERNEL_DIR="${{ matrix.kernel_dir }}"
+          KERNEL_DIR="$HOME/Library/Jupyter/kernels/duckdb"
+          mkdir -p "$KERNEL_DIR"
+          ln -sf "$(pwd)/duckdb-kernel" "$KERNEL_DIR/duckdb-kernel"
+          cp kernel/kernel.json "$KERNEL_DIR/kernel.json"
+          sed -i '' "s|\"duckdb-kernel\"|\"$KERNEL_DIR/duckdb-kernel\"|" "$KERNEL_DIR/kernel.json"
+
+      - name: Install kernel (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          KERNEL_DIR="$HOME/.local/share/jupyter/kernels/duckdb"
           mkdir -p "$KERNEL_DIR"
           cp duckdb-kernel "$KERNEL_DIR/duckdb-kernel"
           cp kernel/kernel.json "$KERNEL_DIR/kernel.json"
-          sed -i'' -e "s|\"duckdb-kernel\"|\"$KERNEL_DIR/duckdb-kernel\"|" "$KERNEL_DIR/kernel.json"
+          sed -i "s|\"duckdb-kernel\"|\"$KERNEL_DIR/duckdb-kernel\"|" "$KERNEL_DIR/kernel.json"
 
-      - name: Install kernel (windows)
+      - name: Install kernel (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
