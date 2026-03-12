@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build -tags duckdb_arrow -o duckdb-kernel ./cmd/duckdb-kernel
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install kernel
+        run: |
+          KERNEL_DIR="$HOME/Library/Jupyter/kernels/duckdb"
+          mkdir -p "$KERNEL_DIR"
+          cp duckdb-kernel "$KERNEL_DIR/duckdb-kernel"
+          cp kernel/kernel.json "$KERNEL_DIR/kernel.json"
+          sed -i'' -e "s|\"duckdb-kernel\"|\"$KERNEL_DIR/duckdb-kernel\"|" "$KERNEL_DIR/kernel.json"
+
+      - name: Install test dependencies
+        run: pip install jupyter_client pyzmq pytest
+
+      - name: Run integration tests
+        run: python -m pytest tests/integration_test.py -v

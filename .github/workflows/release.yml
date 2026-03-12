@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            cc: gcc
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            cc: aarch64-linux-gnu-gcc
+            packages: gcc-aarch64-linux-gnu
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            cc: clang
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            cc: gcc
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install cross-compiler
+        if: matrix.packages != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }}
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "1"
+          CC: ${{ matrix.cc }}
+        shell: bash
+        run: |
+          SUFFIX=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then SUFFIX=".exe"; fi
+          go build -tags duckdb_arrow \
+            -o "duckdb-kernel-${{ matrix.goos }}-${{ matrix.goarch }}${SUFFIX}" \
+            ./cmd/duckdb-kernel
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: duckdb-kernel-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: duckdb-kernel-*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Make binaries executable
+        run: chmod +x artifacts/duckdb-kernel-*
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/*
+            kernel/kernel.json
+            install.sh
