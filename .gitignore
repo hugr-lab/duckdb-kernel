@@ -1,2 +1,27 @@
 .claude/
 .specify/
+specs/
+
+# Go
+*.exe
+*.test
+*.out
+vendor/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.tmp
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+.venv/
+
+# Environment
+.env*

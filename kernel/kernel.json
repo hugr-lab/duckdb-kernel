@@ -1,0 +1,11 @@
+{
+  "argv": ["duckdb-kernel", "--connection-file", "{connection_file}"],
+  "display_name": "DuckDB",
+  "language": "sql",
+  "metadata": {
+    "debugger": false
+  },
+  "env": {
+    "DUCKDB_KERNEL_LOG": "/tmp/duckdb-kernel.log"
+  }
+}

@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            kernel_dir: ~/Library/Jupyter/kernels/duckdb
+          - os: ubuntu-latest
+            kernel_dir: ~/.local/share/jupyter/kernels/duckdb
+          - os: windows-latest
+            kernel_dir: $APPDATA/jupyter/kernels/duckdb
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build -tags duckdb_arrow -o duckdb-kernel ./cmd/duckdb-kernel
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install kernel (unix)
+        if: runner.os != 'Windows'
+        run: |
+          KERNEL_DIR="${{ matrix.kernel_dir }}"
+          mkdir -p "$KERNEL_DIR"
+          cp duckdb-kernel "$KERNEL_DIR/duckdb-kernel"
+          cp kernel/kernel.json "$KERNEL_DIR/kernel.json"
+          sed -i'' -e "s|\"duckdb-kernel\"|\"$KERNEL_DIR/duckdb-kernel\"|" "$KERNEL_DIR/kernel.json"
+
+      - name: Install kernel (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $KernelDir = "$env:APPDATA\jupyter\kernels\duckdb"
+          New-Item -ItemType Directory -Force -Path $KernelDir
+          Copy-Item duckdb-kernel.exe "$KernelDir\duckdb-kernel.exe"
+          Copy-Item kernel\kernel.json "$KernelDir\kernel.json"
+          $json = Get-Content "$KernelDir\kernel.json" | ConvertFrom-Json
+          $json.argv[0] = "$KernelDir\duckdb-kernel.exe"
+          $json | ConvertTo-Json -Depth 10 | Set-Content "$KernelDir\kernel.json"
+
+      - name: Install test dependencies
+        run: pip install jupyter_client pyzmq pytest
+
+      - name: Run integration tests
+        run: python -m pytest tests/integration_test.py -v
