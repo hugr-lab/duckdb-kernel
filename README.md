@@ -11,19 +11,35 @@ A Jupyter-compatible kernel implemented in Go that provides a SQL execution envi
 - Meta commands for database exploration
 - Compatible with JupyterLab, JupyterHub, and VS Code
 
-## Build
-
-```bash
-make build
-```
-
 ## Install
 
+### From release (recommended)
+
 ```bash
+curl -fsSL https://raw.githubusercontent.com/hugr-lab/duckdb-kernel/main/install.sh | bash
+```
+
+To install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hugr-lab/duckdb-kernel/main/install.sh | bash -s v0.1.0
+```
+
+### From source
+
+Requires Go 1.26+ and a C compiler (CGo is used by the DuckDB driver).
+
+```bash
+git clone https://github.com/hugr-lab/duckdb-kernel.git
+cd duckdb-kernel
 make install
 ```
 
-This copies the binary and `kernel.json` to the Jupyter kernel directory.
+Verify the installation:
+
+```bash
+jupyter kernelspec list
+```
 
 ## Usage
 
