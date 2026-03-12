@@ -1,6 +1,6 @@
 BINARY := duckdb-kernel
 BUILD_TAGS := duckdb_arrow
-KERNEL_DIR := $(HOME)/.local/share/jupyter/kernels/duckdb
+KERNEL_DIR := $(HOME)/Library/Jupyter/kernels/duckdb
 
 .PHONY: build install clean
 
@@ -9,7 +9,7 @@ build:
 
 install: build
 	mkdir -p $(KERNEL_DIR)
-	cp $(BINARY) $(KERNEL_DIR)/$(BINARY)
+	ln -sf $(CURDIR)/$(BINARY) $(KERNEL_DIR)/$(BINARY)
 	cp kernel/kernel.json $(KERNEL_DIR)/kernel.json
 	@# Update kernel.json to use absolute path
 	@sed -i'' -e 's|"duckdb-kernel"|"$(KERNEL_DIR)/$(BINARY)"|' $(KERNEL_DIR)/kernel.json

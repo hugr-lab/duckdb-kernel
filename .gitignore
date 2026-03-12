@@ -6,7 +6,6 @@ specs/
 *.exe
 *.test
 *.out
-duckdb-kernel
 vendor/
 
 # OS
