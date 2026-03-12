@@ -153,11 +153,10 @@ func (r *Registry) executeAndRender(ctx context.Context, query string) (string, 
 	}
 	defer reader.Release()
 
-	result, err := engine.BuildFromReader(reader, 1000)
+	result, err := engine.BuildPreviewFromReader(reader, 1000, nil)
 	if err != nil {
 		return "", err
 	}
-	defer result.Release()
 
 	if len(result.Columns) == 0 {
 		return "No results", nil

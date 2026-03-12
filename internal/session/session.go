@@ -4,8 +4,10 @@ import (
 	"context"
 	"sync"
 
+	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/duckdb/duckdb-go/v2"
 	"github.com/hugr-lab/duckdb-kernel/internal/engine"
+	"github.com/hugr-lab/duckdb-kernel/internal/spool"
 )
 
 // Session represents a DuckDB execution context.
@@ -23,14 +25,14 @@ func NewSession(id string, connector *duckdb.Connector) *Session {
 	return &Session{
 		ID:           id,
 		Engine:       engine.NewEngine(connector),
-		PreviewLimit: 50,
+		PreviewLimit: 100,
 		connector:    connector,
 	}
 }
 
-// Execute runs a SQL query within the session, serializing access.
-// Returns a QueryResult with preview rows and Arrow records.
-func (s *Session) Execute(ctx context.Context, query string) (*engine.QueryResult, error) {
+// Execute runs a SQL query, streaming Arrow batches to the writer.
+// Records are NOT accumulated in memory.
+func (s *Session) Execute(ctx context.Context, query string, sw *spool.StreamWriter) (*engine.QueryResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -42,12 +44,12 @@ func (s *Session) Execute(ctx context.Context, query string) (*engine.QueryResul
 	}
 	defer reader.Release()
 
-	result, err := engine.BuildFromReader(reader, s.PreviewLimit)
-	if err != nil {
-		return nil, err
+	var onBatch func(rec arrow.Record) error
+	if sw != nil {
+		onBatch = sw.Write
 	}
 
-	return result, nil
+	return engine.BuildPreviewFromReader(reader, s.PreviewLimit, onBatch)
 }
 
 // ExecutionCount returns the current execution counter value.

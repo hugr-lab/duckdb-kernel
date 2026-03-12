@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"runtime"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/hugr-lab/duckdb-kernel/internal/meta"
 	"github.com/hugr-lab/duckdb-kernel/internal/renderer"
+	"github.com/hugr-lab/duckdb-kernel/internal/spool"
 )
 
 const (
@@ -115,20 +118,37 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 		return
 	}
 
-	// Execute SQL
-	result, err := k.session.Execute(ctx, code)
+	// Create streaming Arrow IPC writer.
+	queryID := uuid.New().String()
+	var sw *spool.StreamWriter
+	if k.spool != nil {
+		var err error
+		sw, err = k.spool.NewStreamWriter(queryID)
+		if err != nil {
+			log.Printf("spool create error: %v", err)
+		}
+	}
+
+	// Execute SQL — batches stream directly to disk.
+	result, err := k.session.Execute(ctx, code, sw)
 	if err != nil {
+		if sw != nil {
+			sw.Close()
+			os.Remove(k.spool.Path(queryID))
+		}
 		k.sendExecuteError(msg, execCount, err)
 		return
 	}
-	defer result.Release()
 
-	// Write Arrow IPC file
-	if k.spool != nil && len(result.Records) > 0 {
-		queryID := uuid.New().String()
-		result.QueryID = queryID
-		if err := k.spool.Write(queryID, result.Records); err != nil {
-			log.Printf("spool write error: %v", err)
+	// Finalize stream writer.
+	if sw != nil {
+		if err := sw.Close(); err != nil {
+			log.Printf("spool close error: %v", err)
+		}
+		if result.TotalRows > 0 {
+			result.QueryID = queryID
+		} else {
+			os.Remove(k.spool.Path(queryID))
 		}
 		if err := k.spool.Cleanup(); err != nil {
 			log.Printf("spool cleanup error: %v", err)
@@ -148,11 +168,35 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 			tableText += fmt.Sprintf("\n\n(%d rows total, showing %d)", result.TotalRows, len(result.Rows))
 		}
 
+		data := map[string]any{
+			"text/plain": tableText,
+		}
+
+		// Add Perspective viewer metadata if Arrow file was written
+		if result.QueryID != "" && k.arrowServer != nil {
+			colDefs := make([]map[string]string, len(result.Columns))
+			for i, col := range result.Columns {
+				colDefs[i] = map[string]string{
+					"name": col.Name,
+					"type": col.Type,
+				}
+			}
+			var memStats runtime.MemStats
+			runtime.ReadMemStats(&memStats)
+
+			data["application/vnd.hugr.result+json"] = map[string]any{
+				"query_id":      result.QueryID,
+				"arrow_url":     k.arrowServer.ArrowURL(result.QueryID, result.TotalRows),
+				"base_url":      k.arrowServer.BaseURL(),
+				"rows":          result.TotalRows,
+				"columns":       colDefs,
+				"kernel_mem_mb": memStats.Sys / 1024 / 1024,
+			}
+		}
+
 		displayMsg := NewMessage(msg, "display_data")
 		displayMsg.Content = map[string]any{
-			"data": map[string]any{
-				"text/plain": tableText,
-			},
+			"data":      data,
 			"metadata":  map[string]any{},
 			"transient": map[string]any{},
 		}
@@ -165,7 +209,7 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 	reply := NewMessage(msg, "execute_reply")
 	reply.Content = map[string]any{
 		"status":          "ok",
-		"execution_count": k.session.ExecutionCount(),
+		"execution_count": execCount,
 	}
 	if err := k.sendMessage(k.shellSocket, reply); err != nil {
 		log.Printf("send execute_reply error: %v", err)

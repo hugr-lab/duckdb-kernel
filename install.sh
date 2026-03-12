@@ -77,6 +77,17 @@ else
     sed -i'' -e "s|\"duckdb-kernel\"|\"${BINARY_PATH}\"|" "${KERNEL_DIR}/kernel.json"
 fi
 
+# Download and extract Perspective static files (for built-in result viewer)
+STATIC_URL="https://github.com/${REPO}/releases/download/${VERSION}/perspective-static.tar.gz"
+echo "Downloading Perspective static files..."
+if curl -fSL -o "${KERNEL_DIR}/perspective-static.tar.gz" "$STATIC_URL"; then
+    tar -xzf "${KERNEL_DIR}/perspective-static.tar.gz" -C "${KERNEL_DIR}"
+    rm -f "${KERNEL_DIR}/perspective-static.tar.gz"
+    echo "Perspective static files installed to ${KERNEL_DIR}/perspective/"
+else
+    echo "Warning: Could not download Perspective static files (non-fatal)"
+fi
+
 echo ""
 echo "duckdb-kernel ${VERSION} installed to ${KERNEL_DIR}"
 echo "Verify with: jupyter kernelspec list"

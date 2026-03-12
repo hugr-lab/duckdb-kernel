@@ -7,6 +7,7 @@ specs/
 *.test
 *.out
 vendor/
+/duckdb-kernel
 
 # OS
 .DS_Store
@@ -22,6 +23,25 @@ Thumbs.db
 .ipynb_checkpoints/
 *.ipynb
 .venv/
+
+# Node.js / TypeScript (extensions)
+node_modules/
+extensions/jupyterlab/lib/
+extensions/jupyterlab/.yarn/cache/
+extensions/jupyterlab/.yarn/install-state.gz
+*.log
+
+# Python (extensions packaging)
+__pycache__/
+*.pyc
+*.egg-info/
+extensions/jupyterlab/hugr_perspective/labextension/
+
+# VS Code extension output
+extensions/vscode/out/
+
+# Generated static files (perspective)
+static/
 
 # Environment
 .env*
