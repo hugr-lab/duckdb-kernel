@@ -28,8 +28,13 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build
+      - name: Build (unix)
+        if: runner.os != 'Windows'
         run: go build -tags duckdb_arrow -o duckdb-kernel ./cmd/duckdb-kernel
+
+      - name: Build (windows)
+        if: runner.os == 'Windows'
+        run: go build -tags duckdb_arrow -o duckdb-kernel.exe ./cmd/duckdb-kernel
 
       - uses: actions/setup-python@v5
         with:
