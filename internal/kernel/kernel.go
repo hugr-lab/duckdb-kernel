@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	zmq "github.com/go-zeromq/zmq4"
+	"github.com/hugr-lab/duckdb-kernel/internal/engine"
 	"github.com/hugr-lab/duckdb-kernel/internal/meta"
 	"github.com/hugr-lab/duckdb-kernel/internal/session"
 	"github.com/hugr-lab/duckdb-kernel/internal/spool"
@@ -90,9 +91,10 @@ func (k *Kernel) Start(ctx context.Context) error {
 		return fmt.Errorf("listen stdin: %w", err)
 	}
 
-	// Start Arrow HTTP server for direct file serving.
+	// Start Arrow HTTP server for direct file serving and introspection.
 	if k.spool != nil {
-		as, err := NewArrowServer(k.spool)
+		introspector := engine.NewIntrospector(k.session.Engine, k.session.ID)
+		as, err := NewArrowServer(k.spool, introspector)
 		if err != nil {
 			log.Printf("Warning: failed to start Arrow HTTP server: %v", err)
 		} else {

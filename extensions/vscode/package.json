@@ -1,14 +1,16 @@
 {
   "name": "hugr-result-renderer",
   "displayName": "HUGR Result Viewer",
-  "description": "Result viewer for DuckDB Kernel in VS Code notebooks",
+  "description": "Result viewer and database explorer for DuckDB Kernel in VS Code notebooks",
   "version": "0.1.0",
   "license": "MIT",
   "engines": {
     "vscode": "^1.80.0"
   },
   "main": "./out/extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "onNotebook:*"
+  ],
   "contributes": {
     "notebookRenderer": [
       {
@@ -19,7 +21,41 @@
           "application/vnd.hugr.result+json"
         ]
       }
-    ]
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "duckdb-explorer",
+          "title": "DuckDB Explorer",
+          "icon": "$(database)"
+        }
+      ]
+    },
+    "views": {
+      "duckdb-explorer": [
+        {
+          "id": "duckdb.objectTree",
+          "name": "Object Tree"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "duckdb.refreshExplorer",
+        "title": "Refresh",
+        "icon": "$(refresh)",
+        "category": "DuckDB"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "duckdb.refreshExplorer",
+          "when": "view == duckdb.objectTree",
+          "group": "navigation"
+        }
+      ]
+    }
   },
   "scripts": {
     "build": "node build.mjs"

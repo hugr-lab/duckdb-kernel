@@ -3,6 +3,7 @@ package kernel
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -10,9 +11,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/apache/arrow-go/v18/arrow/ipc"
+	"github.com/hugr-lab/duckdb-kernel/internal/engine"
 	"github.com/hugr-lab/duckdb-kernel/internal/spool"
 )
 
@@ -20,27 +25,32 @@ const maxArrowRows = 5_000_000
 
 // ArrowServer serves Arrow IPC files over HTTP directly from the spool.
 // Also serves static assets (perspective JS/WASM) for VS Code renderer.
+// Exposes /introspect endpoint for database metadata exploration.
 type ArrowServer struct {
-	spool    *spool.Spool
-	listener net.Listener
-	server   *http.Server
+	spool        *spool.Spool
+	listener     net.Listener
+	server       *http.Server
+	introspector *engine.Introspector
 }
 
 // NewArrowServer creates and starts an HTTP server on a random port.
-func NewArrowServer(sp *spool.Spool) (*ArrowServer, error) {
+func NewArrowServer(sp *spool.Spool, introspector *engine.Introspector) (*ArrowServer, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("listen: %w", err)
 	}
 
 	as := &ArrowServer{
-		spool:    sp,
-		listener: ln,
+		spool:        sp,
+		listener:     ln,
+		introspector: introspector,
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/arrow", as.handleArrow)
 	mux.HandleFunc("/arrow/stream", as.handleArrowStream)
+	mux.HandleFunc("/introspect", as.handleIntrospect)
+	mux.HandleFunc("/spool/delete", as.handleSpoolDelete)
 
 	// Serve perspective static files if available.
 	// Look next to the binary: <binary_dir>/static/perspective/
@@ -232,6 +242,128 @@ func addCORS(h http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		h.ServeHTTP(w, r)
 	})
+}
+
+// handleIntrospect serves database introspection metadata as JSON.
+// GET /introspect?type=...&database=...&schema=...&table=...
+func (as *ArrowServer) handleIntrospect(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	typ := r.URL.Query().Get("type")
+	if typ == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "missing type parameter"})
+		return
+	}
+
+	database := r.URL.Query().Get("database")
+	schema := r.URL.Query().Get("schema")
+	table := r.URL.Query().Get("table")
+
+	var data any
+	var err error
+
+	if typ == "spool_files" {
+		data, err = as.spoolFiles()
+	} else {
+		data, err = as.introspector.Query(r.Context(), typ, database, schema, table)
+	}
+
+	if err != nil {
+		if strings.HasPrefix(err.Error(), "unknown type:") {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": "query failed: " + err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"type": typ,
+		"data": data,
+	})
+}
+
+// handleSpoolDelete removes a single spool file by query_id.
+// DELETE /spool/delete?query_id=...
+func (as *ArrowServer) handleSpoolDelete(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "DELETE, OPTIONS")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	if r.Method != http.MethodDelete {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	queryID := r.URL.Query().Get("query_id")
+	if queryID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "missing query_id parameter"})
+		return
+	}
+
+	if err := as.spool.Remove(queryID); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// spoolFiles lists Arrow spool files with metadata, sorted newest first.
+func (as *ArrowServer) spoolFiles() ([]map[string]any, error) {
+	entries, err := os.ReadDir(as.spool.Dir)
+	if err != nil {
+		return []map[string]any{}, nil
+	}
+
+	type fileEntry struct {
+		name    string
+		size    int64
+		modTime time.Time
+	}
+
+	var files []fileEntry
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".arrow") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, fileEntry{
+			name:    entry.Name(),
+			size:    info.Size(),
+			modTime: info.ModTime(),
+		})
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].modTime.After(files[j].modTime)
+	})
+
+	results := make([]map[string]any, len(files))
+	for i, f := range files {
+		queryID := strings.TrimSuffix(f.name, ".arrow")
+		results[i] = map[string]any{
+			"query_id":   queryID,
+			"size_bytes": f.size,
+			"created_at": f.modTime.UTC().Format(time.RFC3339),
+		}
+	}
+	return results, nil
 }
 
 // ArrowURL returns the URL for fetching the given query's Arrow data.
