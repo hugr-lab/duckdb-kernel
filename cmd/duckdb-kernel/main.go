@@ -30,11 +30,11 @@ func main() {
 	if logPath != "" {
 		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to open log file: %v\n", err)
-			os.Exit(1)
+			fmt.Fprintf(os.Stderr, "Warning: cannot open log file %s: %v (logging to stderr)\n", logPath, err)
+		} else {
+			defer f.Close()
+			log.SetOutput(f)
 		}
-		defer f.Close()
-		log.SetOutput(f)
 	}
 
 	if *connectionFile == "" {

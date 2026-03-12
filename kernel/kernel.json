@@ -5,7 +5,5 @@
   "metadata": {
     "debugger": false
   },
-  "env": {
-    "DUCKDB_KERNEL_LOG": "/tmp/duckdb-kernel.log"
-  }
+  "env": {}
 }
