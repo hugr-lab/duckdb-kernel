@@ -1,0 +1,8 @@
+{
+  "argv": ["duckdb-kernel", "--connection-file", "{connection_file}"],
+  "display_name": "DuckDB",
+  "language": "sql",
+  "metadata": {
+    "debugger": false
+  }
+}
