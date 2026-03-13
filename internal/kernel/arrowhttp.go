@@ -237,6 +237,10 @@ func (as *ArrowServer) BaseURL() string {
 }
 
 // addCORS wraps an http.Handler to add CORS headers.
+// TODO: CORS Allow-Origin: * is required because the VS Code webview origin is
+// dynamic (vscode-webview://<id>) and unpredictable. The server binds to
+// 127.0.0.1 only, so it is not reachable from the network. Consider restricting
+// to vscode-webview:// origins if a reliable pattern emerges.
 func addCORS(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -249,6 +253,12 @@ func addCORS(h http.Handler) http.Handler {
 func (as *ArrowServer) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 
 	typ := r.URL.Query().Get("type")
 	if typ == "" {
@@ -276,8 +286,9 @@ func (as *ArrowServer) handleIntrospect(w http.ResponseWriter, r *http.Request) 
 			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
+		log.Printf("introspect query error (type=%s): %v", typ, err)
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": "query failed: " + err.Error()})
+		json.NewEncoder(w).Encode(map[string]string{"error": "introspection query failed"})
 		return
 	}
 

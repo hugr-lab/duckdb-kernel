@@ -177,9 +177,10 @@ function loadPerspective(baseUrl: string): Promise<any> {
   return _perspectiveReady;
 }
 
-export const activate: ActivationFunction = (_context) => {
-  const abortControllers = new Map<string, AbortController>();
+// Module-level map so renderViewer's "Load All" button can register new controllers.
+const abortControllers = new Map<string, AbortController>();
 
+export const activate: ActivationFunction = (_context) => {
   return {
     async renderOutputItem(data, element) {
       const metadata = data.json() as ResultMetadata;

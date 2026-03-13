@@ -59,7 +59,11 @@ const sidebarPlugin: JupyterFrontEndPlugin<void> = {
 
     notebookTracker.currentChanged.connect(() => void tryDiscover());
     notebookTracker.widgetAdded.connect((_sender, panel) => {
-      panel.sessionContext.statusChanged.connect(() => void tryDiscover());
+      const onStatusChanged = () => void tryDiscover();
+      panel.sessionContext.statusChanged.connect(onStatusChanged);
+      panel.disposed.connect(() => {
+        panel.sessionContext.statusChanged.disconnect(onStatusChanged);
+      });
     });
   },
 };

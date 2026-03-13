@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sort"
 	"strings"
 
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -213,11 +214,18 @@ func (i *Introspector) withFilter(query, column, value string) string {
 	return fmt.Sprintf("%s WHERE %s = '%s'", query, column, escapeSingleQuote(value))
 }
 
-// withFilters adds multiple WHERE clauses to a query.
+// withFilters adds multiple WHERE clauses to a query with deterministic ordering.
 func (i *Introspector) withFilters(query string, filters map[string]string) string {
+	// Sort keys for deterministic query generation.
+	keys := make([]string, 0, len(filters))
+	for col := range filters {
+		keys = append(keys, col)
+	}
+	sort.Strings(keys)
+
 	var conditions []string
-	for col, val := range filters {
-		if val != "" {
+	for _, col := range keys {
+		if val := filters[col]; val != "" {
 			conditions = append(conditions, fmt.Sprintf("%s = '%s'", col, escapeSingleQuote(val)))
 		}
 	}
@@ -227,17 +235,22 @@ func (i *Introspector) withFilters(query string, filters map[string]string) stri
 	return query + " WHERE " + strings.Join(conditions, " AND ")
 }
 
-// qualifiedTable builds a qualified table reference from parts.
+// qualifiedTable builds a qualified table reference from parts using quoted identifiers.
 func qualifiedTable(database, schema, table string) string {
 	parts := []string{}
 	if database != "" {
-		parts = append(parts, escapeSingleQuote(database))
+		parts = append(parts, quoteIdentifier(database))
 	}
 	if schema != "" {
-		parts = append(parts, escapeSingleQuote(schema))
+		parts = append(parts, quoteIdentifier(schema))
 	}
-	parts = append(parts, escapeSingleQuote(table))
+	parts = append(parts, quoteIdentifier(table))
 	return strings.Join(parts, ".")
+}
+
+// quoteIdentifier wraps a SQL identifier in double quotes, escaping embedded double quotes.
+func quoteIdentifier(s string) string {
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
 // escapeSingleQuote escapes single quotes for safe SQL string interpolation.
