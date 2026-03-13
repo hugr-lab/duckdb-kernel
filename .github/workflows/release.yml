@@ -86,6 +86,11 @@ jobs:
       - name: Install JupyterLab build tools
         run: pip install jupyterlab>=4.0.0 build
 
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/^version = .*/version = \"$VERSION\"/" extensions/jupyterlab/pyproject.toml
+
       - name: Build labextension
         working-directory: extensions/jupyterlab
         run: |
@@ -157,6 +162,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
 
   publish-vscode:
     needs: build-vscode
