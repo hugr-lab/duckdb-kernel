@@ -2,93 +2,122 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "v*"
 
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
-  build-binaries:
+  build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
-          - os: ubuntu-24.04-arm
+            cc: gcc
+          - os: ubuntu-latest
             goos: linux
             goarch: arm64
+            cc: aarch64-linux-gnu-gcc
+            packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
           - os: macos-latest
             goos: darwin
             goarch: arm64
+            cc: clang
           - os: windows-latest
             goos: windows
             goarch: amd64
+            cc: gcc
+
     runs-on: ${{ matrix.os }}
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
-      - name: Build binary
-        shell: bash
+      - name: Install cross-compiler
+        if: matrix.packages != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }}
+
+      - name: Build
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "1"
+          CC: ${{ matrix.cc }}
+        shell: bash
         run: |
           SUFFIX=""
-          if [ "$GOOS" = "windows" ]; then SUFFIX=".exe"; fi
-          OUTPUT="duckdb-kernel-${GOOS}-${GOARCH}${SUFFIX}"
-          go build -tags duckdb_arrow -o "$OUTPUT" ./cmd/duckdb-kernel
+          if [ "${{ matrix.goos }}" = "windows" ]; then SUFFIX=".exe"; fi
+          go build -tags duckdb_arrow \
+            -o "duckdb-kernel-${{ matrix.goos }}-${{ matrix.goarch }}${SUFFIX}" \
+            ./cmd/duckdb-kernel
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: binary-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: duckdb-kernel-${{ matrix.goos }}-${{ matrix.goarch }}
           path: duckdb-kernel-*
 
-  build-perspective:
+  build-jupyterlab:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install jupyterlab>=4 build
-      - run: cd extensions/jupyterlab && jlpm install && jlpm build
 
-      - name: Set version from tag
+      - name: Install JupyterLab build tools
+        run: pip install jupyterlab>=4.0.0 build
+
+      - name: Build labextension
+        working-directory: extensions/jupyterlab
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          cd extensions/jupyterlab
-          sed -i "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
+          jlpm install
+          jlpm build:prod
 
       - name: Build Python wheel
-        run: cd extensions/jupyterlab && python -m build
+        working-directory: extensions/jupyterlab
+        run: python -m build
 
-      - name: Package Perspective static files
+      - name: Create perspective-static tarball
         run: |
-          mkdir -p static/perspective
-          cp extensions/jupyterlab/hugr_perspective/labextension/static/perspective/* static/perspective/
-          tar -czf perspective-static.tar.gz -C . static/perspective
+          tar -czf perspective-static.tar.gz \
+            -C extensions/jupyterlab/hugr_perspective/labextension/static perspective
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: jupyterlab-wheel
+          path: extensions/jupyterlab/dist/*.whl
+
+      - name: Upload perspective static files
+        uses: actions/upload-artifact@v4
         with:
           name: perspective-static
           path: perspective-static.tar.gz
-      - uses: actions/upload-artifact@v4
-        with:
-          name: jupyterlab-wheel
-          path: extensions/jupyterlab/dist/*
 
   build-vscode:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -99,15 +128,35 @@ jobs:
           cd extensions/vscode
           npm pkg set version="$VERSION"
 
-      - run: cd extensions/vscode && npm install && npm run build
+      - name: Build VS Code extension
+        working-directory: extensions/vscode
+        run: |
+          npm install
+          npm run build
 
       - name: Package VSIX
-        run: cd extensions/vscode && npx @vscode/vsce package --no-dependencies -o hugr-result-renderer.vsix
+        working-directory: extensions/vscode
+        run: npx @vscode/vsce package --no-dependencies -o hugr-result-renderer.vsix
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload VSIX
+        uses: actions/upload-artifact@v4
         with:
           name: vscode-vsix
           path: extensions/vscode/hugr-result-renderer.vsix
+
+  publish-pypi:
+    needs: build-jupyterlab
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: jupyterlab-wheel
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
 
   publish-vscode:
     needs: build-vscode
@@ -124,46 +173,29 @@ jobs:
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
-  publish-pypi:
-    needs: build-perspective
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: jupyterlab-wheel
-          path: dist
-      - uses: pypa/gh-action-pypi-publish@release/v1
-
   release:
-    needs: [build-binaries, build-perspective, build-vscode]
+    needs: [build, build-jupyterlab, build-vscode]
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          merge-multiple: true
 
-      - name: Prepare release files
-        run: |
-          mkdir -p release
-          # Collect binaries
-          for d in artifacts/binary-*; do
-            cp "$d"/* release/ 2>/dev/null || true
-          done
-          # Perspective static
-          cp artifacts/perspective-static/perspective-static.tar.gz release/
-          # VS Code extension
-          cp artifacts/vscode-vsix/hugr-result-renderer.vsix release/
-          # JupyterLab wheel
-          cp artifacts/jupyterlab-wheel/* release/ 2>/dev/null || true
-          # kernel.json
-          cp kernel/kernel.json release/
+      - name: Make binaries executable
+        run: chmod +x artifacts/duckdb-kernel-* 2>/dev/null || true
 
-      - name: Create GitHub Release
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: release/*
+          files: |
+            artifacts/duckdb-kernel-*
+            artifacts/hugr-result-renderer.vsix
+            artifacts/perspective-static.tar.gz
+            artifacts/*.whl
+            kernel/kernel.json
+            install.sh

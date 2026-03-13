@@ -4,43 +4,125 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: macos-latest
+          - os: ubuntu-latest
+          - os: windows-latest
+
     runs-on: ${{ matrix.os }}
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go build -tags duckdb_arrow -o duckdb-kernel ./cmd/duckdb-kernel
-        shell: bash
-      - run: go test -tags duckdb_arrow ./...
-        shell: bash
 
-  build-vscode:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Build (unix)
+        if: runner.os != 'Windows'
+        run: go build -tags duckdb_arrow -o duckdb-kernel ./cmd/duckdb-kernel
+
+      - name: Build (windows)
+        if: runner.os == 'Windows'
+        run: go build -tags duckdb_arrow -o duckdb-kernel.exe ./cmd/duckdb-kernel
+
+      - name: Run unit tests
+        shell: bash
+        run: go test -tags duckdb_arrow ./...
+
+      - uses: actions/setup-python@v5
         with:
-          node-version: 24
-      - run: cd extensions/vscode && npm install && npm run build
-      - run: test -f extensions/vscode/out/renderer.js
+          python-version: "3.12"
+
+      - name: Install kernel (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          KERNEL_DIR="$HOME/Library/Jupyter/kernels/duckdb"
+          mkdir -p "$KERNEL_DIR"
+          ln -sf "$(pwd)/duckdb-kernel" "$KERNEL_DIR/duckdb-kernel"
+          cp kernel/kernel.json "$KERNEL_DIR/kernel.json"
+          sed -i '' "s|\"duckdb-kernel\"|\"$KERNEL_DIR/duckdb-kernel\"|" "$KERNEL_DIR/kernel.json"
+
+      - name: Install kernel (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          KERNEL_DIR="$HOME/.local/share/jupyter/kernels/duckdb"
+          mkdir -p "$KERNEL_DIR"
+          cp duckdb-kernel "$KERNEL_DIR/duckdb-kernel"
+          cp kernel/kernel.json "$KERNEL_DIR/kernel.json"
+          sed -i "s|\"duckdb-kernel\"|\"$KERNEL_DIR/duckdb-kernel\"|" "$KERNEL_DIR/kernel.json"
+
+      - name: Install kernel (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $KernelDir = "$env:APPDATA\jupyter\kernels\duckdb"
+          New-Item -ItemType Directory -Force -Path $KernelDir
+          Copy-Item duckdb-kernel.exe "$KernelDir\duckdb-kernel.exe"
+          Copy-Item kernel\kernel.json "$KernelDir\kernel.json"
+          $json = Get-Content "$KernelDir\kernel.json" | ConvertFrom-Json
+          $json.argv[0] = "$KernelDir\duckdb-kernel.exe"
+          $json | ConvertTo-Json -Depth 10 | Set-Content "$KernelDir\kernel.json"
+
+      - name: Install test dependencies
+        run: pip install jupyter_client pyzmq pytest
+
+      - name: Run integration tests
+        run: python -m pytest tests/integration_test.py -v
 
   build-jupyterlab:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install jupyterlab>=4
-      - run: cd extensions/jupyterlab && jlpm install && jlpm build
-      - run: test -d extensions/jupyterlab/hugr_perspective/labextension/static
+
+      - name: Install JupyterLab build tools
+        run: pip install jupyterlab>=4.0.0
+
+      - name: Build labextension
+        working-directory: extensions/jupyterlab
+        run: |
+          jlpm install
+          jlpm build:prod
+
+      - name: Verify labextension output
+        run: |
+          test -d extensions/jupyterlab/hugr_perspective/labextension/static
+          echo "labextension build OK"
+
+  build-vscode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Build VS Code extension
+        working-directory: extensions/vscode
+        run: |
+          npm install
+          npm run build
+
+      - name: Verify renderer output
+        run: |
+          test -f extensions/vscode/out/renderer.js
+          echo "VS Code extension build OK"
