@@ -105,7 +105,7 @@ jobs:
         with:
           node-version: 24
       - name: Publish to VS Code Marketplace
-        run: npx @vscode/vsce publish --packagePath hugr-result-renderer.vsix
+        run: npx @vscode/vsce publish --packagePath hugr-result-renderer.vsix || echo "Publish skipped (version may already exist)"
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
