@@ -20,6 +20,7 @@ import {
   resultFilesFetch,
 } from './treeProvider';
 import { showDetailPanel } from './detailPanel';
+import { installKernel } from './installKernel';
 
 let log: vscode.OutputChannel;
 let currentClient: IntrospectClient | null = null;
@@ -159,6 +160,18 @@ export function activate(context: vscode.ExtensionContext) {
 
       const title = `${type.charAt(0).toUpperCase() + type.slice(1)}: ${node.label ?? ''}`;
       showDetailPanel(title, currentClient, type, params);
+    }),
+  );
+
+  // Register installKernel command
+  context.subscriptions.push(
+    vscode.commands.registerCommand('duckdb.installKernel', async () => {
+      try {
+        await installKernel(log);
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Kernel install failed: ${err.message}`);
+        log.appendLine(`Install error: ${err.message}`);
+      }
     }),
   );
 

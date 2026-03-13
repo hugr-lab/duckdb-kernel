@@ -3,7 +3,32 @@
   "displayName": "HUGR Result Viewer",
   "description": "Result viewer and database explorer for DuckDB Kernel in VS Code notebooks",
   "version": "0.1.0",
+  "publisher": "hugr-lab",
   "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hugr-lab/duckdb-kernel",
+    "directory": "extensions/vscode"
+  },
+  "homepage": "https://hugr-lab.github.io",
+  "bugs": {
+    "url": "https://github.com/hugr-lab/duckdb-kernel/issues"
+  },
+  "categories": [
+    "Notebooks",
+    "Data Science",
+    "Visualization"
+  ],
+  "keywords": [
+    "duckdb",
+    "sql",
+    "notebook",
+    "arrow",
+    "perspective",
+    "database",
+    "explorer"
+  ],
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -103,10 +128,21 @@
         "title": "Refresh",
         "icon": "$(refresh)",
         "category": "DuckDB"
+      },
+      {
+        "command": "duckdb.installKernel",
+        "title": "Install / Update DuckDB Kernel",
+        "icon": "$(cloud-download)",
+        "category": "DuckDB"
       }
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "duckdb.installKernel",
+          "when": "view == duckdb.session",
+          "group": "navigation"
+        },
         {
           "command": "duckdb.refreshCatalog",
           "when": "view == duckdb.catalog",
@@ -163,7 +199,8 @@
     }
   },
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "vscode:prepublish": "node build.mjs"
   },
   "devDependencies": {
     "@types/vscode": "^1.80.0",
