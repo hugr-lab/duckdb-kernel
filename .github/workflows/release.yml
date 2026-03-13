@@ -58,17 +58,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install jupyterlab>=4
+      - run: pip install jupyterlab>=4 build
       - run: cd extensions/jupyterlab && jlpm install && jlpm build
+
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd extensions/jupyterlab
+          sed -i "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
+
+      - name: Build Python wheel
+        run: cd extensions/jupyterlab && python -m build
+
       - name: Package Perspective static files
         run: |
           mkdir -p static/perspective
           cp extensions/jupyterlab/hugr_perspective/labextension/static/perspective/* static/perspective/
           tar -czf perspective-static.tar.gz -C . static/perspective
+
       - uses: actions/upload-artifact@v4
         with:
           name: perspective-static
           path: perspective-static.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jupyterlab-wheel
+          path: extensions/jupyterlab/dist/*
 
   build-vscode:
     runs-on: ubuntu-latest
@@ -109,6 +124,18 @@ jobs:
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
+  publish-pypi:
+    needs: build-perspective
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: jupyterlab-wheel
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
   release:
     needs: [build-binaries, build-perspective, build-vscode]
     runs-on: ubuntu-latest
@@ -130,6 +157,8 @@ jobs:
           cp artifacts/perspective-static/perspective-static.tar.gz release/
           # VS Code extension
           cp artifacts/vscode-vsix/hugr-result-renderer.vsix release/
+          # JupyterLab wheel
+          cp artifacts/jupyterlab-wheel/* release/ 2>/dev/null || true
           # kernel.json
           cp kernel/kernel.json release/
 
