@@ -58,6 +58,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install jupyterlab>=4
       - run: cd extensions/jupyterlab && jlpm install && jlpm build
       - name: Package Perspective static files
         run: |
