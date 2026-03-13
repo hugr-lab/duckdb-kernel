@@ -15,10 +15,10 @@ jobs:
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
-          - os: macos-latest
+          - os: macos-13
             goos: darwin
             goarch: amd64
           - os: macos-latest
@@ -80,9 +80,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd extensions/vscode
+          npm pkg set version="$VERSION"
+
       - run: cd extensions/vscode && npm install && npm run build
+
       - name: Package VSIX
         run: cd extensions/vscode && npx @vscode/vsce package --no-dependencies -o hugr-result-renderer.vsix
+
       - uses: actions/upload-artifact@v4
         with:
           name: vscode-vsix
