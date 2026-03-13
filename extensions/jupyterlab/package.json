@@ -29,7 +29,10 @@
     "watch:labextension": "jupyter labextension watch ."
   },
   "dependencies": {
+    "@jupyterlab/application": "^4.0.0",
+    "@jupyterlab/notebook": "^4.0.0",
     "@jupyterlab/rendermime-interfaces": "^3.8.0",
+    "@jupyterlab/ui-components": "^4.0.0",
     "@lumino/widgets": "^2.1.0",
     "@perspective-dev/client": "^4.3.0",
     "@perspective-dev/server": "^4.3.0",
@@ -51,6 +54,7 @@
   "styleModule": "style/index.js",
   "jupyterlab": {
     "mimeExtension": true,
+    "extension": "lib/plugin.js",
     "outputDir": "hugr_perspective/labextension",
     "webpackConfig": "./webpack.config.js"
   }

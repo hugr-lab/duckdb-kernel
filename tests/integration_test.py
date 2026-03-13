@@ -4,9 +4,11 @@ Requires a built and installed duckdb-kernel binary.
 Run: python -m pytest tests/integration_test.py -v
 """
 
+import json
 import os
 import tempfile
 import time
+import urllib.request
 
 import jupyter_client
 import pytest
@@ -61,6 +63,36 @@ def execute(kc, code, timeout=10):
     return displays, errors, display_mime_data
 
 
+def _flush_shell(kc, timeout=0.5):
+    """Drain remaining shell messages."""
+    while True:
+        try:
+            kc.get_shell_msg(timeout=timeout)
+        except Exception:
+            break
+
+
+def _get_base_url(kc):
+    """Extract hugr_base_url from kernel_info_reply."""
+    _flush(kc)
+    _flush_shell(kc)
+    msg_id = kc.kernel_info()
+    reply = kc.get_shell_msg(timeout=10)
+    _flush(kc)
+    return reply["content"].get("hugr_base_url", "")
+
+
+def introspect(base_url, typ, **params):
+    """Call /introspect endpoint and return parsed JSON."""
+    query = f"type={typ}"
+    for k, v in params.items():
+        if v:
+            query += f"&{k}={v}"
+    url = f"{base_url}/introspect?{query}"
+    with urllib.request.urlopen(url, timeout=5) as resp:
+        return json.loads(resp.read())
+
+
 class TestKernelInfo:
     def test_kernel_ready(self, kernel):
         """Kernel starts and responds to kernel_info_request."""
@@ -71,6 +103,11 @@ class TestKernelInfo:
         assert content["implementation"] == "duckdb-kernel"
         assert content["language_info"]["name"] == "sql"
         _flush(kernel)
+
+    def test_hugr_base_url_in_kernel_info(self, kernel):
+        """kernel_info_reply should contain hugr_base_url."""
+        base_url = _get_base_url(kernel)
+        assert base_url.startswith("http://127.0.0.1:"), f"Expected localhost URL, got: {base_url}"
 
 
 class TestMetaCommands:
@@ -148,12 +185,24 @@ class TestSQLExecution:
         assert not errors
         assert "test_users" in displays[0]
 
-    def test_describe(self, kernel):
+    def test_describe_table(self, kernel):
+        """DESCRIBE on a table shows columns with types."""
+        execute(kernel, "CREATE TABLE IF NOT EXISTS test_users (id INTEGER, name VARCHAR)")
         displays, errors, _ = execute(kernel, ":describe test_users")
         assert not errors
         assert len(displays) == 1
         assert "id" in displays[0]
         assert "name" in displays[0]
+        assert "INTEGER" in displays[0]
+        assert "VARCHAR" in displays[0]
+
+    def test_describe_query(self, kernel):
+        """DESCRIBE on a SELECT query shows result column types."""
+        displays, errors, _ = execute(kernel, ":describe SELECT 1 AS x, 'hello' AS y")
+        assert not errors
+        assert len(displays) == 1
+        assert "x" in displays[0]
+        assert "y" in displays[0]
         assert "INTEGER" in displays[0]
         assert "VARCHAR" in displays[0]
 
@@ -275,3 +324,209 @@ class TestDefaultPreviewLimit:
         assert not errors
         assert len(displays) == 1
         assert "200 rows total, showing 100" in displays[0]
+
+
+class TestIntrospection:
+    """Tests for the /introspect HTTP endpoint."""
+
+    def test_missing_type_returns_400(self, kernel):
+        """Missing type parameter should return 400."""
+        base_url = _get_base_url(kernel)
+        url = f"{base_url}/introspect"
+        try:
+            urllib.request.urlopen(url, timeout=5)
+            assert False, "Expected HTTP error"
+        except urllib.error.HTTPError as e:
+            assert e.code == 400
+            body = json.loads(e.read())
+            assert "missing type parameter" in body["error"]
+
+    def test_unknown_type_returns_400(self, kernel):
+        """Unknown type parameter should return 400."""
+        base_url = _get_base_url(kernel)
+        try:
+            introspect(base_url, "nonexistent_type")
+            assert False, "Expected HTTP error"
+        except urllib.error.HTTPError as e:
+            assert e.code == 400
+            body = json.loads(e.read())
+            assert "unknown type" in body["error"]
+
+    def test_session_info(self, kernel):
+        """session_info returns session_id, duckdb_version, kernel_mem_mb."""
+        base_url = _get_base_url(kernel)
+        resp = introspect(base_url, "session_info")
+        assert resp["type"] == "session_info"
+        data = resp["data"]
+        assert "session_id" in data
+        assert "duckdb_version" in data
+        assert data["duckdb_version"].startswith("v")
+        assert "kernel_mem_mb" in data
+
+    def test_databases(self, kernel):
+        """databases returns at least the default memory database."""
+        base_url = _get_base_url(kernel)
+        resp = introspect(base_url, "databases")
+        assert resp["type"] == "databases"
+        names = [d["database_name"] for d in resp["data"]]
+        assert "memory" in names
+
+    def test_schemas(self, kernel):
+        """schemas returns main schema for memory database."""
+        base_url = _get_base_url(kernel)
+        resp = introspect(base_url, "schemas", database="memory")
+        assert resp["type"] == "schemas"
+        names = [s["schema_name"] for s in resp["data"]]
+        assert "main" in names
+
+    def test_tables_after_create(self, kernel):
+        """tables returns created tables."""
+        base_url = _get_base_url(kernel)
+        execute(kernel, "CREATE TABLE IF NOT EXISTS intro_test (id INTEGER, name VARCHAR)")
+        resp = introspect(base_url, "tables", database="memory", schema="main")
+        assert resp["type"] == "tables"
+        names = [t["table_name"] for t in resp["data"]]
+        assert "intro_test" in names
+
+    def test_columns(self, kernel):
+        """columns returns column metadata for a table."""
+        base_url = _get_base_url(kernel)
+        execute(kernel, "CREATE TABLE IF NOT EXISTS intro_test (id INTEGER, name VARCHAR)")
+        resp = introspect(base_url, "columns", database="memory", schema="main", table="intro_test")
+        assert resp["type"] == "columns"
+        col_names = [c["column_name"] for c in resp["data"]]
+        assert "id" in col_names
+        assert "name" in col_names
+
+    def test_views(self, kernel):
+        """views returns created views."""
+        base_url = _get_base_url(kernel)
+        execute(kernel, "CREATE TABLE IF NOT EXISTS intro_test (id INTEGER, name VARCHAR)")
+        execute(kernel, "CREATE VIEW IF NOT EXISTS intro_view AS SELECT id FROM intro_test")
+        resp = introspect(base_url, "views", database="memory", schema="main")
+        assert resp["type"] == "views"
+        names = [v["view_name"] for v in resp["data"]]
+        assert "intro_view" in names
+
+    def test_settings(self, kernel):
+        """settings returns DuckDB configuration."""
+        base_url = _get_base_url(kernel)
+        resp = introspect(base_url, "settings")
+        assert resp["type"] == "settings"
+        assert len(resp["data"]) > 0
+        names = [s["name"] for s in resp["data"]]
+        assert "threads" in names
+
+    def test_extensions(self, kernel):
+        """extensions returns extension list."""
+        base_url = _get_base_url(kernel)
+        resp = introspect(base_url, "extensions")
+        assert resp["type"] == "extensions"
+        assert isinstance(resp["data"], list)
+
+    def test_memory(self, kernel):
+        """memory returns DuckDB buffer manager info."""
+        base_url = _get_base_url(kernel)
+        resp = introspect(base_url, "memory")
+        assert resp["type"] == "memory"
+        assert isinstance(resp["data"], list)
+
+    def test_spool_files(self, kernel):
+        """spool_files returns Arrow result files after a query."""
+        base_url = _get_base_url(kernel)
+        execute(kernel, "SELECT 1 AS spool_test")
+        resp = introspect(base_url, "spool_files")
+        assert resp["type"] == "spool_files"
+        assert len(resp["data"]) > 0
+        assert "query_id" in resp["data"][0]
+        assert "size_bytes" in resp["data"][0]
+
+    def test_describe(self, kernel):
+        """describe returns DESCRIBE output for a table."""
+        base_url = _get_base_url(kernel)
+        execute(kernel, "CREATE TABLE IF NOT EXISTS intro_test (id INTEGER, name VARCHAR)")
+        resp = introspect(base_url, "describe", database="memory", schema="main", table="intro_test")
+        assert resp["type"] == "describe"
+        assert len(resp["data"]) > 0
+        col_names = [c["column_name"] for c in resp["data"]]
+        assert "id" in col_names
+
+    def test_summarize(self, kernel):
+        """summarize returns SUMMARIZE output for a table."""
+        base_url = _get_base_url(kernel)
+        execute(kernel, "CREATE TABLE IF NOT EXISTS intro_test (id INTEGER, name VARCHAR)")
+        execute(kernel, "INSERT INTO intro_test VALUES (1, 'a') ON CONFLICT DO NOTHING")
+        resp = introspect(base_url, "summarize", database="memory", schema="main", table="intro_test")
+        assert resp["type"] == "summarize"
+        assert len(resp["data"]) > 0
+
+    def test_secrets(self, kernel):
+        """secrets returns list without credential values."""
+        base_url = _get_base_url(kernel)
+        resp = introspect(base_url, "secrets")
+        assert resp["type"] == "secrets"
+        assert isinstance(resp["data"], list)
+        # Verify no credential fields leak through.
+        for s in resp["data"]:
+            assert "secret" not in s, "Credential values should not be exposed"
+            assert "token" not in s, "Token values should not be exposed"
+
+    def test_secret_types(self, kernel):
+        """secret_types returns available secret types."""
+        base_url = _get_base_url(kernel)
+        resp = introspect(base_url, "secret_types")
+        assert resp["type"] == "secret_types"
+        assert isinstance(resp["data"], list)
+
+
+class TestMimeTimingMetadata:
+    """Tests for data_size_bytes, query_time_ms, transfer_time_ms in MIME metadata."""
+
+    MIME_TYPE = "application/vnd.hugr.result+json"
+
+    def test_timing_fields_present(self, kernel):
+        """MIME metadata should contain timing and size fields."""
+        _, errors, mime_data = execute(kernel, "SELECT 42 AS val")
+        assert not errors
+        meta = mime_data[0][self.MIME_TYPE]
+        assert "data_size_bytes" in meta
+        assert "query_time_ms" in meta
+        assert "transfer_time_ms" in meta
+        assert meta["data_size_bytes"] > 0
+        assert meta["query_time_ms"] >= 0
+        assert meta["transfer_time_ms"] >= 0
+
+    def test_kernel_mem_removed(self, kernel):
+        """kernel_mem_mb should no longer be in MIME metadata."""
+        _, errors, mime_data = execute(kernel, "SELECT 1 AS val")
+        assert not errors
+        meta = mime_data[0][self.MIME_TYPE]
+        assert "kernel_mem_mb" not in meta
+
+
+class TestExplainCommand:
+    """Tests for :explain meta command."""
+
+    def test_explain_returns_html(self, kernel):
+        """":explain SELECT ..." should return HTML output."""
+        execute(kernel, "CREATE TABLE IF NOT EXISTS explain_test AS SELECT range AS id FROM range(100)")
+        _, errors, mime_data = execute(kernel, ":explain SELECT * FROM explain_test WHERE id > 50")
+        assert not errors
+        assert len(mime_data) == 1
+        assert "text/html" in mime_data[0]
+        html = mime_data[0]["text/html"]
+        assert "<" in html  # Basic HTML check
+
+    def test_explain_missing_sql(self, kernel):
+        """":explain" without SQL should return an error."""
+        _, errors, _ = execute(kernel, ":explain")
+        assert len(errors) == 1
+        assert "usage" in errors[0].lower()
+
+    def test_explain_plain_text_fallback(self, kernel):
+        """":explain" should also include text/plain fallback."""
+        execute(kernel, "CREATE TABLE IF NOT EXISTS explain_test AS SELECT range AS id FROM range(10)")
+        _, errors, mime_data = execute(kernel, ":explain SELECT * FROM explain_test")
+        assert not errors
+        assert len(mime_data) == 1
+        assert "text/plain" in mime_data[0]

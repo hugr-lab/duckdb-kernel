@@ -17,7 +17,9 @@ interface ResultMetadata {
   arrow_url: string;
   rows: number;
   columns: { name: string; type: string }[];
-  kernel_mem_mb?: number;
+  data_size_bytes?: number;
+  query_time_ms?: number;
+  transfer_time_ms?: number;
 }
 
 let _perspectiveReady: Promise<any> | null = null;
@@ -52,6 +54,18 @@ function loadPerspective(): Promise<any> {
 
 function formatNumber(n: number): string {
   return n.toLocaleString('en-US');
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  let val = bytes;
+  while (val >= 1024 && i < units.length - 1) {
+    val /= 1024;
+    i++;
+  }
+  return `${val.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
 function parseTruncation(arrowUrl: string): {
@@ -208,8 +222,14 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       } else if (metadata?.rows) {
         statusParts.push(`${formatNumber(metadata.rows)} rows`);
       }
-      if (metadata?.kernel_mem_mb) {
-        statusParts.push(`Kernel: ${formatNumber(metadata.kernel_mem_mb)} MB`);
+      if (metadata?.data_size_bytes != null && metadata.data_size_bytes > 0) {
+        statusParts.push(formatBytes(metadata.data_size_bytes));
+      }
+      if (metadata?.query_time_ms != null) {
+        statusParts.push(`Query: ${metadata.query_time_ms} ms`);
+      }
+      if (metadata?.transfer_time_ms != null) {
+        statusParts.push(`Transfer: ${metadata.transfer_time_ms} ms`);
       }
 
       if (statusParts.length > 0 || truncation.truncated) {

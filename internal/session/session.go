@@ -30,13 +30,20 @@ func NewSession(id string, connector *duckdb.Connector) *Session {
 	}
 }
 
+// NextExecutionCount atomically increments and returns the new execution counter.
+// Must be called once per execute request, before any messages are sent.
+func (s *Session) NextExecutionCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.executionCount++
+	return s.executionCount
+}
+
 // Execute runs a SQL query, streaming Arrow batches to the writer.
 // Records are NOT accumulated in memory.
 func (s *Session) Execute(ctx context.Context, query string, sw *spool.StreamWriter) (*engine.QueryResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	s.executionCount++
 
 	reader, err := s.Engine.Execute(ctx, query)
 	if err != nil {

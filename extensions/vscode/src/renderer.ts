@@ -13,11 +13,25 @@ interface ResultMetadata {
   base_url: string;
   rows: number;
   columns: { name: string; type: string }[];
-  kernel_mem_mb?: number;
+  data_size_bytes?: number;
+  query_time_ms?: number;
+  transfer_time_ms?: number;
 }
 
 function formatNumber(n: number): string {
   return n.toLocaleString('en-US');
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  let val = bytes;
+  while (val >= 1024 && i < units.length - 1) {
+    val /= 1024;
+    i++;
+  }
+  return `${val.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
 function parseTruncation(arrowUrl: string): {
@@ -125,12 +139,18 @@ function loadPerspective(baseUrl: string): Promise<any> {
   _perspectiveBaseUrl = baseUrl;
   const staticBase = `${baseUrl}/static/perspective`;
   _perspectiveReady = (async () => {
-    const [perspective] = await Promise.all([
-      import(/* webpackIgnore: true */ `${staticBase}/perspective.js`),
-      import(/* webpackIgnore: true */ `${staticBase}/perspective-viewer.js`),
-      import(/* webpackIgnore: true */ `${staticBase}/perspective-viewer-datagrid.js`),
-      import(/* webpackIgnore: true */ `${staticBase}/perspective-viewer-d3fc.js`),
-    ]);
+    let perspective: any;
+    const alreadyLoaded = customElements.get('perspective-viewer') !== undefined;
+    if (alreadyLoaded) {
+      perspective = await import(/* webpackIgnore: true */ `${staticBase}/perspective.js`);
+    } else {
+      [perspective] = await Promise.all([
+        import(/* webpackIgnore: true */ `${staticBase}/perspective.js`),
+        import(/* webpackIgnore: true */ `${staticBase}/perspective-viewer.js`),
+        import(/* webpackIgnore: true */ `${staticBase}/perspective-viewer-datagrid.js`),
+        import(/* webpackIgnore: true */ `${staticBase}/perspective-viewer-d3fc.js`),
+      ]);
+    }
     // Fetch and inject theme CSS inline (VS Code webview CSP may block <link>).
     const themeTag = 'hugr-perspective-themes';
     if (!document.getElementById(themeTag)) {
@@ -157,9 +177,10 @@ function loadPerspective(baseUrl: string): Promise<any> {
   return _perspectiveReady;
 }
 
-export const activate: ActivationFunction = (_context) => {
-  const abortControllers = new Map<string, AbortController>();
+// Module-level map so renderViewer's "Load All" button can register new controllers.
+const abortControllers = new Map<string, AbortController>();
 
+export const activate: ActivationFunction = (_context) => {
   return {
     async renderOutputItem(data, element) {
       const metadata = data.json() as ResultMetadata;
@@ -224,8 +245,14 @@ async function renderViewer(
     } else if (metadata.rows) {
       statusParts.push(`${formatNumber(metadata.rows)} rows`);
     }
-    if (metadata.kernel_mem_mb) {
-      statusParts.push(`Kernel: ${formatNumber(metadata.kernel_mem_mb)} MB`);
+    if (metadata.data_size_bytes != null && metadata.data_size_bytes > 0) {
+      statusParts.push(formatBytes(metadata.data_size_bytes));
+    }
+    if (metadata.query_time_ms != null) {
+      statusParts.push(`Query: ${metadata.query_time_ms} ms`);
+    }
+    if (metadata.transfer_time_ms != null) {
+      statusParts.push(`Transfer: ${metadata.transfer_time_ms} ms`);
     }
 
     if (statusParts.length > 0 || truncation.truncated) {

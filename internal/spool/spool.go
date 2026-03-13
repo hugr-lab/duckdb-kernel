@@ -108,6 +108,15 @@ func (s *Spool) Path(queryID string) string {
 	return filepath.Join(s.Dir, filepath.Base(queryID)+".arrow")
 }
 
+// Remove deletes a single spool file by query ID.
+func (s *Spool) Remove(queryID string) error {
+	path := s.Path(queryID)
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("remove spool file: %w", err)
+	}
+	return nil
+}
+
 // Cleanup removes files exceeding the max count and max age limits.
 func (s *Spool) Cleanup() error {
 	entries, err := os.ReadDir(s.Dir)

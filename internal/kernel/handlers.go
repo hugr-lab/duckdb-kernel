@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"runtime"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hugr-lab/duckdb-kernel/internal/meta"
@@ -40,7 +40,7 @@ func (k *Kernel) handleShellMessage(ctx context.Context, msg *Message) {
 
 func (k *Kernel) handleKernelInfoRequest(msg *Message) {
 	reply := NewMessage(msg, "kernel_info_reply")
-	reply.Content = map[string]any{
+	content := map[string]any{
 		"protocol_version": ProtocolVersion,
 		"implementation":   "duckdb-kernel",
 		"implementation_version": KernelVersion,
@@ -53,6 +53,10 @@ func (k *Kernel) handleKernelInfoRequest(msg *Message) {
 		"banner": fmt.Sprintf("DuckDB Kernel v%s", KernelVersion),
 		"status": "ok",
 	}
+	if k.arrowServer != nil {
+		content["hugr_base_url"] = k.arrowServer.BaseURL()
+	}
+	reply.Content = content
 	if err := k.sendMessage(k.shellSocket, reply); err != nil {
 		log.Printf("send kernel_info_reply error: %v", err)
 	}
@@ -62,7 +66,7 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 	code, _ := msg.Content["code"].(string)
 	code = strings.TrimSpace(code)
 
-	execCount := k.session.ExecutionCount()
+	execCount := k.session.NextExecutionCount()
 
 	// Publish execute_input on iopub
 	inputMsg := NewMessage(msg, "execute_input")
@@ -89,17 +93,25 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 
 	// Check for meta command
 	if meta.IsMeta(code) {
-		output, err := k.metaRegistry.Dispatch(ctx, code)
+		result, err := k.metaRegistry.Dispatch(ctx, code)
 		if err != nil {
 			k.sendExecuteError(msg, execCount, err)
 			return
 		}
-		if output != "" {
+		if result != nil && (result.Text != "" || result.HTML != "") {
+			data := map[string]any{}
+			if result.Text != "" {
+				data["text/plain"] = result.Text
+			}
+			if result.HTML != "" {
+				data["text/html"] = result.HTML
+				if result.Text == "" {
+					data["text/plain"] = "Query execution plan (HTML)"
+				}
+			}
 			displayMsg := NewMessage(msg, "display_data")
 			displayMsg.Content = map[string]any{
-				"data": map[string]any{
-					"text/plain": output,
-				},
+				"data":      data,
 				"metadata":  map[string]any{},
 				"transient": map[string]any{},
 			}
@@ -130,7 +142,9 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 	}
 
 	// Execute SQL — batches stream directly to disk.
+	queryStart := time.Now()
 	result, err := k.session.Execute(ctx, code, sw)
+	queryTimeMs := time.Since(queryStart).Milliseconds()
 	if err != nil {
 		if sw != nil {
 			sw.Close()
@@ -141,12 +155,19 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 	}
 
 	// Finalize stream writer.
+	var transferTimeMs int64
+	var dataSizeBytes int64
 	if sw != nil {
+		transferStart := time.Now()
 		if err := sw.Close(); err != nil {
 			log.Printf("spool close error: %v", err)
 		}
+		transferTimeMs = time.Since(transferStart).Milliseconds()
 		if result.TotalRows > 0 {
 			result.QueryID = queryID
+			if info, err := os.Stat(k.spool.Path(queryID)); err == nil {
+				dataSizeBytes = info.Size()
+			}
 		} else {
 			os.Remove(k.spool.Path(queryID))
 		}
@@ -181,16 +202,16 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 					"type": col.Type,
 				}
 			}
-			var memStats runtime.MemStats
-			runtime.ReadMemStats(&memStats)
 
 			data["application/vnd.hugr.result+json"] = map[string]any{
-				"query_id":      result.QueryID,
-				"arrow_url":     k.arrowServer.ArrowURL(result.QueryID, result.TotalRows),
-				"base_url":      k.arrowServer.BaseURL(),
-				"rows":          result.TotalRows,
-				"columns":       colDefs,
-				"kernel_mem_mb": memStats.Sys / 1024 / 1024,
+				"query_id":         result.QueryID,
+				"arrow_url":        k.arrowServer.ArrowURL(result.QueryID, result.TotalRows),
+				"base_url":         k.arrowServer.BaseURL(),
+				"rows":             result.TotalRows,
+				"columns":          colDefs,
+				"data_size_bytes":  dataSizeBytes,
+				"query_time_ms":    queryTimeMs,
+				"transfer_time_ms": transferTimeMs,
 			}
 		}
 
