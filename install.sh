@@ -77,6 +77,16 @@ else
     sed -i'' -e "s|\"duckdb-kernel\"|\"${BINARY_PATH}\"|" "${KERNEL_DIR}/kernel.json"
 fi
 
+# Download kernel logos
+for LOGO in logo-32x32.png logo-64x64.png; do
+    LOGO_URL="https://github.com/${REPO}/releases/download/${VERSION}/${LOGO}"
+    if curl -fSL -o "${KERNEL_DIR}/${LOGO}" "$LOGO_URL" 2>/dev/null; then
+        true
+    else
+        echo "Warning: Could not download ${LOGO} (non-fatal)"
+    fi
+done
+
 # Download and extract Perspective static files (for built-in result viewer)
 STATIC_URL="https://github.com/${REPO}/releases/download/${VERSION}/perspective-static.tar.gz"
 echo "Downloading Perspective static files..."

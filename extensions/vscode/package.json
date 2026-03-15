@@ -52,7 +52,10 @@
         {
           "id": "duckdb-explorer",
           "title": "DuckDB Explorer",
-          "icon": "media/database.svg"
+          "icon": {
+            "light": "media/duckdb-light.svg",
+            "dark": "media/duckdb-dark.svg"
+          }
         }
       ]
     },

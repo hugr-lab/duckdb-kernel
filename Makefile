@@ -13,6 +13,8 @@ install: build copy-perspective
 	cp kernel/kernel.json $(KERNEL_DIR)/kernel.json
 	@# Update kernel.json to use absolute path
 	@sed -i'' -e 's|"duckdb-kernel"|"$(KERNEL_DIR)/$(BINARY)"|' $(KERNEL_DIR)/kernel.json
+	@# Copy kernel logos
+	@cp kernel/logo-32x32.png kernel/logo-64x64.png $(KERNEL_DIR)/ 2>/dev/null || true
 	@# Symlink perspective static files next to binary
 	@ln -sfn $(CURDIR)/static $(KERNEL_DIR)/static
 	@echo "Kernel installed to $(KERNEL_DIR)"

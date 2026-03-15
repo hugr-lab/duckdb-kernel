@@ -162,6 +162,18 @@ export async function installKernel(log: vscode.OutputChannel): Promise<void> {
       spec.argv[0] = binaryPath;
       fs.writeFileSync(jsonPath, JSON.stringify(spec, null, 2));
 
+      // Download kernel logos (optional)
+      for (const logoName of ['logo-32x32.png', 'logo-64x64.png']) {
+        const logoAsset = release.assets.find((a) => a.name === logoName);
+        if (logoAsset) {
+          try {
+            await httpsDownload(logoAsset.browser_download_url, path.join(dir, logoName));
+          } catch {
+            // Non-fatal
+          }
+        }
+      }
+
       // Download Perspective static files (optional)
       const staticAsset = release.assets.find((a) => a.name === 'perspective-static.tar.gz');
       if (staticAsset) {
