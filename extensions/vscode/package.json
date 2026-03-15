@@ -34,7 +34,15 @@
   },
   "main": "./out/extension.js",
   "activationEvents": [
-    "onNotebook:*"
+    "onNotebook:*",
+    "onView:duckdb.session",
+    "onView:duckdb.catalog",
+    "onView:duckdb.systemFunctions",
+    "onView:duckdb.extensions",
+    "onView:duckdb.secrets",
+    "onView:duckdb.settings",
+    "onView:duckdb.memory",
+    "onView:duckdb.resultFiles"
   ],
   "contributes": {
     "notebookRenderer": [
@@ -52,10 +60,7 @@
         {
           "id": "duckdb-explorer",
           "title": "DuckDB Explorer",
-          "icon": {
-            "light": "media/duckdb-light.svg",
-            "dark": "media/duckdb-dark.svg"
-          }
+          "icon": "media/duckdb-activitybar.svg"
         }
       ]
     },
