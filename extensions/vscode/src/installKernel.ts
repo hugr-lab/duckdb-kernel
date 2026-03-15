@@ -122,6 +122,25 @@ export async function installKernel(log: vscode.OutputChannel): Promise<void> {
       const binaryPath = path.join(dir, `duckdb-kernel${suffix}`);
       const jsonPath = path.join(dir, 'kernel.json');
 
+      // Check if existing binary is a symlink (dev install via `make install`)
+      try {
+        const stat = fs.lstatSync(binaryPath);
+        if (stat.isSymbolicLink()) {
+          const target = fs.readlinkSync(binaryPath);
+          const answer = await vscode.window.showWarningMessage(
+            `A dev kernel is symlinked at ${binaryPath} → ${target}. Replace with release binary?`,
+            'Replace', 'Cancel',
+          );
+          if (answer !== 'Replace') {
+            log.appendLine('Install cancelled — dev symlink preserved');
+            return;
+          }
+          fs.unlinkSync(binaryPath);
+        }
+      } catch {
+        // File doesn't exist yet — fine
+      }
+
       // Download binary
       progress.report({ message: `Downloading ${bin}...` });
       await httpsDownload(binAsset.browser_download_url, binaryPath, (pct) => {
@@ -150,9 +169,12 @@ export async function installKernel(log: vscode.OutputChannel): Promise<void> {
         const tarPath = path.join(dir, 'perspective-static.tar.gz');
         try {
           await httpsDownload(staticAsset.browser_download_url, tarPath);
-          // Extract using tar (available on all platforms with modern Node)
+          // Extract into static/ subdirectory next to the binary.
+          // The tar contains perspective/ at root, kernel looks for static/perspective/.
+          const staticDir = path.join(dir, 'static');
+          fs.mkdirSync(staticDir, { recursive: true });
           const { execSync } = await import('child_process');
-          execSync(`tar -xzf "${tarPath}" -C "${dir}"`);
+          execSync(`tar -xzf "${tarPath}" -C "${staticDir}"`);
           fs.unlinkSync(tarPath);
           log.appendLine('Perspective static files installed');
         } catch (e: any) {

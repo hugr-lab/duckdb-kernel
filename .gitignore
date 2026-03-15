@@ -43,5 +43,8 @@ extensions/vscode/out/
 # Generated static files (perspective)
 static/
 
+# Posts / drafts
+posts/
+
 # Environment
 .env*
