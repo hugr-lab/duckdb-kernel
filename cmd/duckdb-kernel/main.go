@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/duckdb/duckdb-go/v2"
 	"github.com/google/uuid"
@@ -74,17 +75,36 @@ func main() {
 	// Create kernel
 	k := kernel.NewKernel(connInfo, sess, sp)
 
-	// Handle OS signals
+	// Handle OS signals (including SIGHUP which VS Code may send)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
 		<-sigCh
 		log.Println("Received shutdown signal")
 		k.Shutdown()
 		cancel()
+	}()
+
+	// Watchdog: exit if parent process dies (e.g., VS Code crashed or closed).
+	// This prevents orphaned kernel processes.
+	ppid := os.Getppid()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+				if os.Getppid() != ppid {
+					log.Println("Parent process exited, shutting down")
+					k.Shutdown()
+					cancel()
+					return
+				}
+			}
+		}
 	}()
 
 	// Start kernel
