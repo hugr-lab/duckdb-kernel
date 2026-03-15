@@ -91,9 +91,10 @@ done
 STATIC_URL="https://github.com/${REPO}/releases/download/${VERSION}/perspective-static.tar.gz"
 echo "Downloading Perspective static files..."
 if curl -fSL -o "${KERNEL_DIR}/perspective-static.tar.gz" "$STATIC_URL"; then
-    tar -xzf "${KERNEL_DIR}/perspective-static.tar.gz" -C "${KERNEL_DIR}"
+    mkdir -p "${KERNEL_DIR}/static"
+    tar -xzf "${KERNEL_DIR}/perspective-static.tar.gz" -C "${KERNEL_DIR}/static"
     rm -f "${KERNEL_DIR}/perspective-static.tar.gz"
-    echo "Perspective static files installed to ${KERNEL_DIR}/perspective/"
+    echo "Perspective static files installed to ${KERNEL_DIR}/static/perspective/"
 else
     echo "Warning: Could not download Perspective static files (non-fatal)"
 fi

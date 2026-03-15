@@ -205,6 +205,8 @@ interface ArrowPartState {
 export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
   private _mimeType: string;
   private _arrowParts: ArrowPartState[] = [];
+  private _lazyRender: ((idx: number) => Promise<void>) | null = null;
+  private _resizeObserver: ResizeObserver | null = null;
 
   constructor(options: IRenderMime.IRendererOptions) {
     super();
@@ -330,7 +332,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
     await this._renderPartContent(parts[0], tabPanels[0]);
 
     // Store lazy render callback
-    (this as any)._lazyRender = async (idx: number) => {
+    this._lazyRender = async (idx: number) => {
       if (rendered.has(idx)) return;
       rendered.add(idx);
       await this._renderPartContent(parts[idx], tabPanels[idx]);
@@ -338,9 +340,8 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
 
     // Check overflow after render
     this._checkTabOverflow(tabBar, moreBtn);
-    const ro = new ResizeObserver(() => this._checkTabOverflow(tabBar, moreBtn));
-    ro.observe(tabBarWrap);
-    (this as any)._resizeObserver = ro;
+    this._resizeObserver = new ResizeObserver(() => this._checkTabOverflow(tabBar, moreBtn));
+    this._resizeObserver.observe(tabBarWrap);
   }
 
   /** Check if tabs overflow and show/hide more button. */
@@ -350,20 +351,20 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
 
   /** Show dropdown menu for overflowed tabs. */
   private _showOverflowMenu(
-    tabBar: HTMLElement,
+    _tabBar: HTMLElement,
     buttons: HTMLElement[],
     panels: HTMLElement[],
     moreBtn: HTMLElement,
   ): void {
-    // Remove existing menu
-    const existing = this.node.querySelector('.hugr-tabs-overflow-menu');
+    // The menu is appended to tabBarWrap (moreBtn's parent) which has position: relative
+    const wrap = moreBtn.parentElement!;
+
+    // Remove existing menu (toggle behavior)
+    const existing = wrap.querySelector('.hugr-tabs-overflow-menu');
     if (existing) { existing.remove(); return; }
 
     const menu = document.createElement('div');
     menu.className = 'hugr-tabs-overflow-menu';
-
-    const barRect = moreBtn.getBoundingClientRect();
-    const parentRect = this.node.getBoundingClientRect();
 
     // Show all parts in the selector
     for (let i = 0; i < buttons.length; i++) {
@@ -382,9 +383,10 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       menu.appendChild(item);
     }
 
-    menu.style.top = `${barRect.bottom - parentRect.top}px`;
+    // Position below the tab bar, aligned to the right edge
+    menu.style.top = '100%';
     menu.style.right = '0';
-    this.node.appendChild(menu);
+    wrap.appendChild(menu);
 
     // Close on outside click
     const closeHandler = (e: MouseEvent) => {
@@ -402,9 +404,8 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       panels[i].style.display = i === activeIdx ? '' : 'none';
     }
     // Trigger lazy render
-    const lazyRender = (this as any)._lazyRender;
-    if (lazyRender) {
-      lazyRender(activeIdx);
+    if (this._lazyRender) {
+      void this._lazyRender(activeIdx);
     }
   }
 
@@ -489,6 +490,8 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
         btn.addEventListener('click', async () => {
           btn.disabled = true;
           btn.textContent = 'Loading...';
+          // Clean up the existing ArrowPartState for this container before re-rendering
+          await this._cleanupArrowPartsIn(container);
           container.innerHTML = '';
           await this._renderArrowInto(
             { ...part, arrow_url: buildFullUrl(part.arrow_url!) },
@@ -784,10 +787,25 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
     }
   }
 
+  /** Clean up ArrowPartStates whose viewer is inside the given container. */
+  private async _cleanupArrowPartsIn(container: HTMLElement): Promise<void> {
+    const remaining: ArrowPartState[] = [];
+    for (const part of this._arrowParts) {
+      if (container.contains(part.viewer)) {
+        part.abortController.abort();
+        try { await (part.viewer as any).delete?.(); } catch { /* ignore */ }
+        try { await part.table?.delete?.(); } catch { /* ignore */ }
+        try { await part.client?.terminate?.(); } catch { /* ignore */ }
+      } else {
+        remaining.push(part);
+      }
+    }
+    this._arrowParts = remaining;
+  }
+
   private async _cleanup(): Promise<void> {
-    (this as any)._lazyRender = null;
-    const ro = (this as any)._resizeObserver as ResizeObserver | null;
-    if (ro) { ro.disconnect(); (this as any)._resizeObserver = null; }
+    this._lazyRender = null;
+    if (this._resizeObserver) { this._resizeObserver.disconnect(); this._resizeObserver = null; }
     for (const part of this._arrowParts) {
       part.abortController.abort();
       try { await (part.viewer as any).delete?.(); } catch { /* ignore */ }
