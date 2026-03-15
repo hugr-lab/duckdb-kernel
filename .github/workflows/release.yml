@@ -204,4 +204,6 @@ jobs:
             artifacts/perspective-static.tar.gz
             artifacts/*.whl
             kernel/kernel.json
+            kernel/logo-32x32.png
+            kernel/logo-64x64.png
             install.sh

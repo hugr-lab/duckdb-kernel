@@ -17,10 +17,10 @@ import { IntrospectClient } from './introspectClient.js';
 const duckdbIcon = new LabIcon({
   name: '@hugr-lab/perspective-viewer:duckdb-icon',
   svgstr:
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
-    '<ellipse cx="12" cy="6" rx="8" ry="3" fill="none" stroke="currentColor" stroke-width="1.5"/>' +
-    '<path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6" fill="none" stroke="currentColor" stroke-width="1.5"/>' +
-    '<path d="M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" fill="none" stroke="currentColor" stroke-width="1.5"/>' +
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500">' +
+    '<path fill="currentColor" d="M250,500C112,500,0,388,0,250S111.4,0,250,0,500,112,500,250,388,500,250,500Z"/>' +
+    '<path fill="#fff100" d="M190.1,146.6c-56.8,0-103.4,46.6-103.4,103.4s46.6,103.4,103.4,103.4,103.4-46.6,103.4-103.4-46.6-103.4-103.4-103.4Z"/>' +
+    '<path fill="#fff100" d="M376.1,212.8h-49.1v74.4h49.1c20.6,0,37.2-16.7,37.2-37.2s-16.7-37.2-37.2-37.2Z"/>' +
     '</svg>',
 });
 
@@ -389,9 +389,8 @@ export class DuckDBSidebarWidget extends Widget {
     super();
     this.addClass('hugr-sidebar');
     this.id = 'duckdb-explorer-sidebar';
-    this.title.label = 'DuckDB Explorer';
     this.title.icon = duckdbIcon;
-    this.title.caption = 'DuckDB Database Explorer';
+    this.title.caption = 'DuckDB Explorer';
     this.title.closable = true;
     this.node.innerHTML =
       '<div class="hugr-sidebar-placeholder">No active DuckDB kernel</div>';
