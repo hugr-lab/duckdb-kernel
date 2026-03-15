@@ -75,12 +75,17 @@ func main() {
 	// Create kernel
 	k := kernel.NewKernel(connInfo, sess, sp)
 
-	// Context cancelled on SIGINT, SIGTERM, or SIGHUP (VS Code may send SIGHUP on close)
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	// Context cancelled on SIGINT, SIGTERM, or SIGHUP (VS Code may send SIGHUP on close).
+	// The same context is passed to ZMQ sockets — cancellation unblocks Recv() calls.
+	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 
+	// Wrap with a manual cancel so the watchdog can also cancel the context.
+	ctx, cancel := context.WithCancel(sigCtx)
+	defer cancel()
+
 	// Watchdog: exit if parent process dies (e.g., VS Code crashed or closed).
-	// This prevents orphaned kernel processes.
+	// This prevents orphaned kernel processes holding ZMQ ports.
 	ppid := os.Getppid()
 	go func() {
 		for {
@@ -90,7 +95,7 @@ func main() {
 			case <-time.After(5 * time.Second):
 				if os.Getppid() != ppid {
 					log.Println("Parent process exited, shutting down")
-					k.Shutdown()
+					cancel()
 					return
 				}
 			}
