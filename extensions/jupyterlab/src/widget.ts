@@ -501,6 +501,16 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
         banner.appendChild(btn);
       }
 
+      const openTabBtn = document.createElement('button');
+      openTabBtn.className = 'hugr-open-tab-btn';
+      openTabBtn.textContent = 'Open in Tab';
+      openTabBtn.addEventListener('click', () => {
+        document.dispatchEvent(new CustomEvent('hugr:open-in-tab', {
+          detail: { arrowUrl: buildFullUrl(part.arrow_url!), title: part.title || part.id || 'Result' }
+        }));
+      });
+      banner.appendChild(openTabBtn);
+
       container.appendChild(banner);
     }
 
@@ -770,6 +780,16 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
           });
           banner.appendChild(btn);
         }
+
+        const openTabBtn = document.createElement('button');
+        openTabBtn.className = 'hugr-open-tab-btn';
+        openTabBtn.textContent = 'Open in Tab';
+        openTabBtn.addEventListener('click', () => {
+          document.dispatchEvent(new CustomEvent('hugr:open-in-tab', {
+            detail: { arrowUrl: buildFullUrl(metadata.arrow_url!), title: metadata.query_id || 'Result' }
+          }));
+        });
+        banner.appendChild(openTabBtn);
 
         this.node.appendChild(banner);
       }

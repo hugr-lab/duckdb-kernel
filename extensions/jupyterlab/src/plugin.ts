@@ -10,8 +10,10 @@ import {
   ILayoutRestorer,
 } from '@jupyterlab/application';
 import { INotebookTracker } from '@jupyterlab/notebook';
+import { MainAreaWidget } from '@jupyterlab/apputils';
 import { DuckDBSidebarWidget } from './sidebar.js';
 import { IntrospectClient } from './introspectClient.js';
+import { PerspectiveTabWidget } from './perspectiveTab.js';
 
 const sidebarPlugin: JupyterFrontEndPlugin<void> = {
   id: '@hugr-lab/perspective-viewer:sidebar',
@@ -24,6 +26,16 @@ const sidebarPlugin: JupyterFrontEndPlugin<void> = {
     restorer: ILayoutRestorer | null,
   ) => {
     console.log('[DuckDB Explorer] Sidebar plugin activated');
+
+    document.addEventListener('hugr:open-in-tab', ((e: CustomEvent) => {
+      const { arrowUrl, title } = e.detail;
+      const content = new PerspectiveTabWidget(arrowUrl, title);
+      const widget = new MainAreaWidget({ content });
+      widget.title.label = title || 'Result';
+      widget.title.closable = true;
+      app.shell.add(widget, 'main');
+    }) as EventListener);
+
     const sidebar = new DuckDBSidebarWidget();
 
     app.shell.add(sidebar, 'right', { rank: 500 });

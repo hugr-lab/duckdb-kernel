@@ -283,6 +283,7 @@ async function renderViewer(
       element.appendChild(banner);
     }
 
+
     // Container with fixed height. Capture wheel events to prevent
     // notebook scroll when user scrolls inside the datagrid.
     const container = document.createElement('div');
