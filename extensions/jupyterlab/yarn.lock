@@ -589,6 +589,7 @@ __metadata:
   resolution: "@hugr-lab/perspective-viewer@workspace:."
   dependencies:
     "@jupyterlab/application": ^4.0.0
+    "@jupyterlab/apputils": ^4.0.0
     "@jupyterlab/builder": ^4.0.0
     "@jupyterlab/notebook": ^4.0.0
     "@jupyterlab/rendermime-interfaces": ^3.8.0
@@ -795,7 +796,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@jupyterlab/apputils@npm:^4.6.6":
+"@jupyterlab/apputils@npm:^4.0.0, @jupyterlab/apputils@npm:^4.6.6":
   version: 4.6.6
   resolution: "@jupyterlab/apputils@npm:4.6.6"
   dependencies:
