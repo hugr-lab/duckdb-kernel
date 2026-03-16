@@ -20,6 +20,7 @@ import {
   resultFilesFetch,
 } from './treeProvider';
 import { showDetailPanel } from './detailPanel';
+import { showPerspectivePanel } from './perspectivePanel';
 import { installKernel } from './installKernel';
 
 let log: vscode.OutputChannel;
@@ -200,6 +201,72 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
+  // "Open Result in Tab" command — scans the active cell's outputs for result metadata
+  context.subscriptions.push(
+    vscode.commands.registerCommand('duckdb.openResultInTab', (cellOrUri?: any) => {
+      const editor = vscode.window.activeNotebookEditor;
+      if (!editor) return;
+
+      // Find the cell to inspect
+      let cell: vscode.NotebookCell | undefined;
+      if (cellOrUri && typeof cellOrUri.index === 'number') {
+        // Called from cell toolbar — receives the cell
+        cell = editor.notebook.cellAt(cellOrUri.index);
+      } else {
+        // Called from command palette — use current selection
+        const sel = editor.selections[0];
+        if (sel) cell = editor.notebook.cellAt(sel.start);
+      }
+      if (!cell) return;
+
+      // Find hugr result metadata in the cell's outputs
+      for (const output of cell.outputs) {
+        for (const item of output.items) {
+          if (item.mime === 'application/vnd.hugr.result+json') {
+            try {
+              const metadata = JSON.parse(new TextDecoder().decode(item.data));
+              if (metadata.arrow_url && metadata.base_url) {
+                // Strip limit/total to get full data
+                let fullUrl = metadata.arrow_url;
+                try {
+                  const u = new URL(fullUrl);
+                  u.searchParams.delete('limit');
+                  u.searchParams.delete('total');
+                  fullUrl = u.toString();
+                } catch { /* keep original */ }
+                showPerspectivePanel({
+                  query_id: metadata.query_id ?? 'result',
+                  arrow_url: fullUrl,
+                  base_url: metadata.base_url,
+                });
+                return;
+              }
+            } catch { /* skip */ }
+          }
+        }
+      }
+      vscode.window.showInformationMessage('No DuckDB result found in this cell.');
+    }),
+  );
+
+  // Renderer messaging — handle "Open in Tab" from renderer
+  const rendererMessaging = vscode.notebooks.createRendererMessaging('hugr-result-renderer');
+  context.subscriptions.push(
+    rendererMessaging.onDidReceiveMessage((e) => {
+      const msg = e.message as any;
+      if (msg?.type === 'open-in-tab' && msg.arrow_url && msg.base_url) {
+        showPerspectivePanel({
+          query_id: msg.title ?? 'result',
+          arrow_url: msg.arrow_url,
+          base_url: msg.base_url,
+        });
+      }
+      if (msg?.type === 'open-json-in-tab' && msg.data !== undefined) {
+        showJsonPanel(msg.title ?? 'JSON', msg.data);
+      }
+    }),
+  );
+
   // Watch for notebook document changes (includes output additions).
   context.subscriptions.push(
     vscode.workspace.onDidChangeNotebookDocument((e) => {
@@ -288,4 +355,58 @@ function discoverKernel(notebook: vscode.NotebookDocument): void {
 
 export function deactivate() {
   // Cleanup handled by disposables.
+}
+
+const jsonPanels = new Map<string, vscode.WebviewPanel>();
+
+function showJsonPanel(title: string, data: any): void {
+  const key = `json-${title}`;
+  const existing = jsonPanels.get(key);
+  if (existing) {
+    existing.reveal();
+    return;
+  }
+
+  const panel = vscode.window.createWebviewPanel(
+    'hugrJsonViewer',
+    title,
+    vscode.ViewColumn.Beside,
+    { enableScripts: false },
+  );
+
+  let jsonStr: string;
+  try {
+    jsonStr = JSON.stringify(data, null, 2);
+  } catch {
+    jsonStr = String(data);
+  }
+
+  panel.webview.html = `<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body {
+    margin: 0;
+    padding: 16px;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 13px;
+    color: var(--vscode-editor-foreground, #d4d4d4);
+    background: var(--vscode-editor-background, #1e1e1e);
+  }
+  pre {
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 0;
+  }
+</style>
+</head>
+<body><pre>${escapeHtml(jsonStr)}</pre></body>
+</html>`;
+
+  panel.onDidDispose(() => jsonPanels.delete(key));
+  jsonPanels.set(key, panel);
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

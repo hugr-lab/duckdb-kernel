@@ -501,6 +501,16 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
         banner.appendChild(btn);
       }
 
+      const openTabBtn = document.createElement('button');
+      openTabBtn.className = 'hugr-open-tab-btn';
+      openTabBtn.textContent = 'Open in Tab';
+      openTabBtn.addEventListener('click', () => {
+        document.dispatchEvent(new CustomEvent('hugr:open-in-tab', {
+          detail: { arrowUrl: buildFullUrl(part.arrow_url!), title: part.title || part.id || 'Result' }
+        }));
+      });
+      banner.appendChild(openTabBtn);
+
       container.appendChild(banner);
     }
 
@@ -535,7 +545,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
 
   /** Render JSON part as a collapsible tree with raw toggle. */
   private _renderJsonInto(part: PartDef, container: HTMLElement): void {
-    // Toolbar with raw toggle
+    // Toolbar with raw toggle and open in tab
     const toolbar = document.createElement('div');
     toolbar.className = 'hugr-json-toolbar';
 
@@ -544,6 +554,18 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
     rawBtn.textContent = 'Raw';
     rawBtn.title = 'Toggle raw JSON';
     toolbar.appendChild(rawBtn);
+
+    const openTabBtn = document.createElement('button');
+    openTabBtn.className = 'hugr-open-tab-btn';
+    openTabBtn.textContent = 'Open in Tab';
+    openTabBtn.title = 'Open JSON in a separate tab';
+    openTabBtn.addEventListener('click', () => {
+      document.dispatchEvent(new CustomEvent('hugr:open-json-in-tab', {
+        detail: { data: part.data, title: part.title || part.id || 'JSON' }
+      }));
+    });
+    toolbar.appendChild(openTabBtn);
+
     container.appendChild(toolbar);
 
     // Tree view
@@ -770,6 +792,16 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
           });
           banner.appendChild(btn);
         }
+
+        const openTabBtn = document.createElement('button');
+        openTabBtn.className = 'hugr-open-tab-btn';
+        openTabBtn.textContent = 'Open in Tab';
+        openTabBtn.addEventListener('click', () => {
+          document.dispatchEvent(new CustomEvent('hugr:open-in-tab', {
+            detail: { arrowUrl: buildFullUrl(metadata.arrow_url!), title: metadata.query_id || 'Result' }
+          }));
+        });
+        banner.appendChild(openTabBtn);
 
         this.node.appendChild(banner);
       }
