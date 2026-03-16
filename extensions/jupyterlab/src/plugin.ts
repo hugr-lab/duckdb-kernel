@@ -14,6 +14,7 @@ import { MainAreaWidget } from '@jupyterlab/apputils';
 import { DuckDBSidebarWidget } from './sidebar.js';
 import { IntrospectClient } from './introspectClient.js';
 import { PerspectiveTabWidget } from './perspectiveTab.js';
+import { JsonTabWidget } from './jsonTab.js';
 
 const sidebarPlugin: JupyterFrontEndPlugin<void> = {
   id: '@hugr-lab/perspective-viewer:sidebar',
@@ -32,6 +33,15 @@ const sidebarPlugin: JupyterFrontEndPlugin<void> = {
       const content = new PerspectiveTabWidget(arrowUrl, title);
       const widget = new MainAreaWidget({ content });
       widget.title.label = title || 'Result';
+      widget.title.closable = true;
+      app.shell.add(widget, 'main');
+    }) as EventListener);
+
+    document.addEventListener('hugr:open-json-in-tab', ((e: CustomEvent) => {
+      const { data, title } = e.detail;
+      const content = new JsonTabWidget(data, title);
+      const widget = new MainAreaWidget({ content });
+      widget.title.label = title || 'JSON';
       widget.title.closable = true;
       app.shell.add(widget, 'main');
     }) as EventListener);

@@ -249,6 +249,24 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
+  // Renderer messaging — handle "Open in Tab" from renderer
+  const rendererMessaging = vscode.notebooks.createRendererMessaging('hugr-result-renderer');
+  context.subscriptions.push(
+    rendererMessaging.onDidReceiveMessage((e) => {
+      const msg = e.message as any;
+      if (msg?.type === 'open-in-tab' && msg.arrow_url && msg.base_url) {
+        showPerspectivePanel({
+          query_id: msg.title ?? 'result',
+          arrow_url: msg.arrow_url,
+          base_url: msg.base_url,
+        });
+      }
+      if (msg?.type === 'open-json-in-tab' && msg.data !== undefined) {
+        showJsonPanel(msg.title ?? 'JSON', msg.data);
+      }
+    }),
+  );
+
   // Watch for notebook document changes (includes output additions).
   context.subscriptions.push(
     vscode.workspace.onDidChangeNotebookDocument((e) => {
@@ -337,4 +355,58 @@ function discoverKernel(notebook: vscode.NotebookDocument): void {
 
 export function deactivate() {
   // Cleanup handled by disposables.
+}
+
+const jsonPanels = new Map<string, vscode.WebviewPanel>();
+
+function showJsonPanel(title: string, data: any): void {
+  const key = `json-${title}`;
+  const existing = jsonPanels.get(key);
+  if (existing) {
+    existing.reveal();
+    return;
+  }
+
+  const panel = vscode.window.createWebviewPanel(
+    'hugrJsonViewer',
+    title,
+    vscode.ViewColumn.Beside,
+    { enableScripts: false },
+  );
+
+  let jsonStr: string;
+  try {
+    jsonStr = JSON.stringify(data, null, 2);
+  } catch {
+    jsonStr = String(data);
+  }
+
+  panel.webview.html = `<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body {
+    margin: 0;
+    padding: 16px;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 13px;
+    color: var(--vscode-editor-foreground, #d4d4d4);
+    background: var(--vscode-editor-background, #1e1e1e);
+  }
+  pre {
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 0;
+  }
+</style>
+</head>
+<body><pre>${escapeHtml(jsonStr)}</pre></body>
+</html>`;
+
+  panel.onDidDispose(() => jsonPanels.delete(key));
+  jsonPanels.set(key, panel);
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

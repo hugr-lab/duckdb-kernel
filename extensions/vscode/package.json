@@ -2,7 +2,7 @@
   "name": "hugr-result-renderer",
   "displayName": "HUGR Result Viewer",
   "description": "Result viewer and database explorer for DuckDB Kernel in VS Code notebooks",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "hugr-lab",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -52,7 +52,8 @@
         "entrypoint": "./out/renderer.js",
         "mimeTypes": [
           "application/vnd.hugr.result+json"
-        ]
+        ],
+        "requiresMessaging": "optional"
       }
     ],
     "viewsContainers": {
