@@ -7,8 +7,8 @@ require (
 	github.com/duckdb/duckdb-go/v2 v2.10500.0
 	github.com/go-zeromq/zmq4 v0.17.0
 	github.com/google/uuid v1.6.0
+	github.com/hugr-lab/query-engine/types v0.3.6
 	github.com/olekukonko/tablewriter v1.1.3
-	github.com/hugr-lab/query-engine/types v0.3.5
 )
 
 require (
@@ -39,7 +39,7 @@ require (
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
-	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
+	golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa // indirect
 	golang.org/x/mod v0.33.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
@@ -48,5 +48,3 @@ require (
 	golang.org/x/tools v0.42.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 )
-
-replace github.com/hugr-lab/query-engine/types => ../query-engine/types
