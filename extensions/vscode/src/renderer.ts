@@ -358,25 +358,75 @@ function injectStyles(): void {
       font-size: 13px;
     }
     .hugr-json-raw {
-      padding: 8px;
+      display: flex;
       font-family: var(--vscode-editor-font-family);
       font-size: 13px;
-      overflow-x: auto;
-      white-space: pre-wrap;
-      word-break: break-all;
+      overflow: auto;
+      max-height: 600px;
+      line-height: 1.5;
     }
+    .hugr-json-gutter {
+      flex-shrink: 0;
+      padding: 4px 8px 4px 4px;
+      text-align: right;
+      color: var(--vscode-editorLineNumber-foreground, #858585);
+      user-select: none;
+      border-right: 1px solid var(--vscode-panel-border);
+      min-width: 36px;
+    }
+    .hugr-json-gutter-line {
+      display: block;
+      height: 1.5em;
+    }
+    .hugr-json-code {
+      flex: 1;
+      padding: 4px 0 4px 8px;
+      white-space: pre;
+      overflow-x: auto;
+    }
+    .hugr-json-code-line {
+      display: block;
+      height: 1.5em;
+    }
+    .hugr-json-fold-btn {
+      display: inline-block;
+      width: 1em;
+      text-align: center;
+      cursor: pointer;
+      user-select: none;
+      color: var(--vscode-editorCodeLens-foreground, #999);
+      font-size: 10px;
+    }
+    .hugr-json-fold-btn:hover {
+      color: var(--vscode-foreground);
+    }
+    .hugr-json-fold-placeholder {
+      color: var(--vscode-descriptionForeground);
+      cursor: pointer;
+      font-style: italic;
+    }
+    .hugr-json-fold-placeholder:hover {
+      color: var(--vscode-foreground);
+    }
+    .hugr-json-bracket {
+      color: var(--vscode-descriptionForeground);
+    }
+    .hugr-json-bracket-highlight {
+      background: var(--vscode-editorBracketMatch-background, rgba(0,100,200,0.2));
+      outline: 1px solid var(--vscode-editorBracketMatch-border, rgba(0,100,200,0.4));
+      border-radius: 1px;
+    }
+    .hugr-json-key { color: var(--vscode-symbolIcon-propertyForeground, #9cdcfe); }
+    .hugr-json-string { color: var(--vscode-debugTokenExpression-string, #ce9178); }
+    .hugr-json-number { color: var(--vscode-debugTokenExpression-number, #b5cea8); }
+    .hugr-json-bool { color: var(--vscode-debugTokenExpression-boolean, #569cd6); }
+    .hugr-json-null { color: var(--vscode-descriptionForeground); font-style: italic; }
     .hugr-json-row { cursor: pointer; }
     .hugr-json-toggle { margin-right: 4px; font-size: 10px; user-select: none; }
     .hugr-json-summary { color: var(--vscode-descriptionForeground); }
     .hugr-json-children { padding-left: 16px; }
     .hugr-json-entry { line-height: 1.6; }
-    .hugr-json-key { color: var(--vscode-symbolIcon-propertyForeground, #9cdcfe); }
     .hugr-json-index { color: var(--vscode-descriptionForeground); }
-    .hugr-json-string { color: var(--vscode-debugTokenExpression-string, #ce9178); }
-    .hugr-json-number { color: var(--vscode-debugTokenExpression-number, #b5cea8); }
-    .hugr-json-bool { color: var(--vscode-debugTokenExpression-boolean, #569cd6); }
-    .hugr-json-null { color: var(--vscode-descriptionForeground); font-style: italic; }
-    .hugr-json-bracket { color: var(--vscode-descriptionForeground); }
     .hugr-result-loading {
       padding: 8px;
       color: var(--vscode-descriptionForeground);
@@ -793,13 +843,18 @@ async function renderArrowPart(
 }
 
 function renderJsonPart(part: PartDef, container: HTMLElement): void {
-  // Toolbar with raw toggle and open in tab
+  // Toolbar with view toggle and open in tab
   const toolbar = document.createElement('div');
   toolbar.className = 'hugr-json-toolbar';
+
+  const treeBtn = document.createElement('button');
+  treeBtn.className = 'hugr-json-raw-btn hugr-json-raw-btn-active';
+  treeBtn.textContent = 'Tree';
+  toolbar.appendChild(treeBtn);
+
   const rawBtn = document.createElement('button');
   rawBtn.className = 'hugr-json-raw-btn';
   rawBtn.textContent = 'Raw';
-  rawBtn.title = 'Toggle raw JSON';
   toolbar.appendChild(rawBtn);
 
   if (_rendererMessaging) {
@@ -825,24 +880,275 @@ function renderJsonPart(part: PartDef, container: HTMLElement): void {
   buildJsonTree(part.data, tree, true);
   container.appendChild(tree);
 
-  // Raw view (hidden)
-  const raw = document.createElement('pre');
-  raw.className = 'hugr-json-raw';
-  raw.style.display = 'none';
-  try {
-    raw.textContent = JSON.stringify(part.data, null, 2);
-  } catch {
-    raw.textContent = String(part.data);
-  }
-  container.appendChild(raw);
+  // Raw view with syntax highlighting, line numbers, folding, bracket matching
+  const rawWrap = document.createElement('div');
+  rawWrap.className = 'hugr-json-raw';
+  rawWrap.style.display = 'none';
+  buildJsonRawView(part.data, rawWrap);
+  container.appendChild(rawWrap);
 
-  let showingRaw = false;
-  rawBtn.addEventListener('click', () => {
-    showingRaw = !showingRaw;
-    tree.style.display = showingRaw ? 'none' : '';
-    raw.style.display = showingRaw ? '' : 'none';
-    rawBtn.classList.toggle('hugr-json-raw-btn-active', showingRaw);
+  let mode: 'tree' | 'raw' = 'tree';
+  const setMode = (m: 'tree' | 'raw') => {
+    mode = m;
+    tree.style.display = m === 'tree' ? '' : 'none';
+    rawWrap.style.display = m === 'raw' ? '' : 'none';
+    treeBtn.classList.toggle('hugr-json-raw-btn-active', m === 'tree');
+    rawBtn.classList.toggle('hugr-json-raw-btn-active', m === 'raw');
+  };
+  treeBtn.addEventListener('click', () => setMode('tree'));
+  rawBtn.addEventListener('click', () => setMode('raw'));
+}
+
+/** Tokenize JSON string into typed spans. */
+interface JsonLine {
+  indent: string;
+  tokens: { cls: string; text: string }[];
+  foldable: boolean;    // line has opening bracket
+  foldEnd?: number;     // line index of matching closing bracket
+  bracketId?: number;   // unique ID for bracket pair matching
+}
+
+function tokenizeJson(data: any): JsonLine[] {
+  let jsonStr: string;
+  try {
+    jsonStr = JSON.stringify(data, null, 2);
+  } catch {
+    jsonStr = String(data);
+  }
+
+  const rawLines = jsonStr.split('\n');
+  const lines: JsonLine[] = [];
+  let bracketCounter = 0;
+
+  // First pass: build tokenized lines
+  for (const raw of rawLines) {
+    const indent = raw.match(/^(\s*)/)?.[1] ?? '';
+    const content = raw.slice(indent.length);
+    const tokens: { cls: string; text: string }[] = [];
+    let pos = 0;
+
+    while (pos < content.length) {
+      const ch = content[pos];
+
+      if (ch === '"') {
+        // Check if it's a key (followed by : after closing quote)
+        const endQuote = findClosingQuote(content, pos);
+        const after = content.slice(endQuote + 1).trimStart();
+        const str = content.slice(pos, endQuote + 1);
+
+        if (after.startsWith(':')) {
+          tokens.push({ cls: 'hugr-json-key', text: str });
+          pos = endQuote + 1;
+          // consume colon and space
+          const colonMatch = content.slice(pos).match(/^(\s*:\s*)/);
+          if (colonMatch) {
+            tokens.push({ cls: '', text: colonMatch[1] });
+            pos += colonMatch[1].length;
+          }
+        } else {
+          tokens.push({ cls: 'hugr-json-string', text: str });
+          pos = endQuote + 1;
+        }
+      } else if (ch === '{' || ch === '[') {
+        tokens.push({ cls: 'hugr-json-bracket', text: ch });
+        pos++;
+      } else if (ch === '}' || ch === ']') {
+        tokens.push({ cls: 'hugr-json-bracket', text: ch });
+        pos++;
+      } else if (/[0-9\-]/.test(ch)) {
+        const numMatch = content.slice(pos).match(/^-?[0-9]+\.?[0-9]*([eE][+-]?[0-9]+)?/);
+        if (numMatch) {
+          tokens.push({ cls: 'hugr-json-number', text: numMatch[0] });
+          pos += numMatch[0].length;
+        } else {
+          tokens.push({ cls: '', text: ch });
+          pos++;
+        }
+      } else if (content.slice(pos, pos + 4) === 'true') {
+        tokens.push({ cls: 'hugr-json-bool', text: 'true' });
+        pos += 4;
+      } else if (content.slice(pos, pos + 5) === 'false') {
+        tokens.push({ cls: 'hugr-json-bool', text: 'false' });
+        pos += 5;
+      } else if (content.slice(pos, pos + 4) === 'null') {
+        tokens.push({ cls: 'hugr-json-null', text: 'null' });
+        pos += 4;
+      } else {
+        // comma, whitespace, etc
+        tokens.push({ cls: '', text: ch });
+        pos++;
+      }
+    }
+
+    const foldable = /[{\[]$/.test(content.trimEnd().replace(/,\s*$/, ''));
+    lines.push({ indent, tokens, foldable });
+  }
+
+  // Second pass: match bracket pairs for folding
+  const stack: { lineIdx: number; id: number }[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const content = lines[i].tokens.map(t => t.text).join('').trim();
+    if (/[{\[]\s*$/.test(content)) {
+      const id = bracketCounter++;
+      lines[i].bracketId = id;
+      stack.push({ lineIdx: i, id });
+    }
+    if (/^[}\]]/.test(content) && stack.length > 0) {
+      const open = stack.pop()!;
+      lines[open.lineIdx].foldEnd = i;
+      lines[i].bracketId = open.id;
+    }
+  }
+
+  return lines;
+}
+
+function findClosingQuote(s: string, start: number): number {
+  let i = start + 1;
+  while (i < s.length) {
+    if (s[i] === '\\') { i += 2; continue; }
+    if (s[i] === '"') return i;
+    i++;
+  }
+  return s.length - 1;
+}
+
+function buildJsonRawView(data: any, container: HTMLElement): void {
+  const lines = tokenizeJson(data);
+
+  const gutter = document.createElement('div');
+  gutter.className = 'hugr-json-gutter';
+
+  const code = document.createElement('div');
+  code.className = 'hugr-json-code';
+
+  const gutterLines: HTMLElement[] = [];
+  const codeLines: HTMLElement[] = [];
+  const bracketSpans = new Map<number, HTMLElement[]>(); // bracketId → spans
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Gutter line number
+    const gutterLine = document.createElement('span');
+    gutterLine.className = 'hugr-json-gutter-line';
+    gutterLine.textContent = String(i + 1);
+    gutter.appendChild(gutterLine);
+    gutterLines.push(gutterLine);
+
+    // Code line
+    const codeLine = document.createElement('span');
+    codeLine.className = 'hugr-json-code-line';
+
+    // Fold button (or spacer)
+    if (line.foldable && line.foldEnd != null) {
+      const foldBtn = document.createElement('span');
+      foldBtn.className = 'hugr-json-fold-btn';
+      foldBtn.textContent = '\u25BC';
+      const foldStart = i;
+      const foldEndIdx = line.foldEnd;
+      foldBtn.addEventListener('click', () => {
+        toggleFold(foldBtn, foldStart, foldEndIdx, gutterLines, codeLines, lines);
+      });
+      codeLine.appendChild(foldBtn);
+    } else {
+      const spacer = document.createElement('span');
+      spacer.className = 'hugr-json-fold-btn';
+      spacer.textContent = ' ';
+      codeLine.appendChild(spacer);
+    }
+
+    // Indent
+    if (line.indent) {
+      codeLine.appendChild(document.createTextNode(line.indent));
+    }
+
+    // Tokens
+    for (const token of line.tokens) {
+      const span = document.createElement('span');
+      if (token.cls) span.className = token.cls;
+      span.textContent = token.text;
+
+      // Track bracket spans for highlighting
+      if (token.cls === 'hugr-json-bracket' && line.bracketId != null) {
+        let arr = bracketSpans.get(line.bracketId);
+        if (!arr) { arr = []; bracketSpans.set(line.bracketId, arr); }
+        arr.push(span);
+      }
+
+      codeLine.appendChild(span);
+    }
+
+    code.appendChild(codeLine);
+    codeLines.push(codeLine);
+  }
+
+  // Bracket matching on hover
+  let currentHighlight: HTMLElement[] = [];
+  code.addEventListener('mouseover', (e) => {
+    const target = e.target as HTMLElement;
+    if (!target.classList.contains('hugr-json-bracket')) return;
+
+    // Clear previous
+    for (const el of currentHighlight) el.classList.remove('hugr-json-bracket-highlight');
+    currentHighlight = [];
+
+    // Find which bracketId this span belongs to
+    for (const [, spans] of bracketSpans) {
+      if (spans.includes(target)) {
+        for (const s of spans) s.classList.add('hugr-json-bracket-highlight');
+        currentHighlight = spans;
+        break;
+      }
+    }
   });
+
+  code.addEventListener('mouseleave', () => {
+    for (const el of currentHighlight) el.classList.remove('hugr-json-bracket-highlight');
+    currentHighlight = [];
+  });
+
+  container.appendChild(gutter);
+  container.appendChild(code);
+}
+
+function toggleFold(
+  btn: HTMLElement,
+  startLine: number,
+  endLine: number,
+  gutterLines: HTMLElement[],
+  codeLines: HTMLElement[],
+  lines: JsonLine[],
+): void {
+  const isCollapsed = btn.textContent === '\u25B6';
+
+  if (isCollapsed) {
+    // Expand
+    btn.textContent = '\u25BC';
+    for (let i = startLine + 1; i <= endLine; i++) {
+      gutterLines[i].style.display = '';
+      codeLines[i].style.display = '';
+    }
+    // Remove placeholder if any
+    const placeholder = codeLines[startLine].querySelector('.hugr-json-fold-placeholder');
+    if (placeholder) placeholder.remove();
+  } else {
+    // Collapse
+    btn.textContent = '\u25B6';
+    for (let i = startLine + 1; i <= endLine; i++) {
+      gutterLines[i].style.display = 'none';
+      codeLines[i].style.display = 'none';
+    }
+    // Add placeholder showing collapsed info
+    const hiddenCount = endLine - startLine - 1;
+    const placeholder = document.createElement('span');
+    placeholder.className = 'hugr-json-fold-placeholder';
+    placeholder.textContent = ` ... ${hiddenCount} lines `;
+    placeholder.addEventListener('click', () => {
+      toggleFold(btn, startLine, endLine, gutterLines, codeLines, lines);
+    });
+    codeLines[startLine].appendChild(placeholder);
+  }
 }
 
 function buildJsonTree(data: any, parent: HTMLElement, expanded: boolean): void {

@@ -51,7 +51,7 @@ func (s *Session) Execute(ctx context.Context, query string, sw *spool.StreamWri
 	}
 	defer reader.Release()
 
-	var onBatch func(rec arrow.Record) error
+	var onBatch func(rec arrow.RecordBatch) error
 	if sw != nil {
 		onBatch = sw.Write
 	}

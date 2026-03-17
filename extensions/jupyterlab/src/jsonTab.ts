@@ -3,6 +3,7 @@
  */
 
 import { Widget } from '@lumino/widgets';
+import { buildJsonRawView } from './widget';
 
 export class JsonTabWidget extends Widget {
   constructor(data: any, title?: string) {
@@ -18,11 +19,16 @@ export class JsonTabWidget extends Widget {
     const toolbar = document.createElement('div');
     toolbar.style.cssText = 'margin-bottom: 8px; display: flex; gap: 8px;';
 
+    const treeBtn = document.createElement('button');
+    treeBtn.className = 'hugr-json-raw-btn hugr-json-raw-btn-active';
+    treeBtn.textContent = 'Tree';
+    toolbar.appendChild(treeBtn);
+
     const rawBtn = document.createElement('button');
     rawBtn.className = 'hugr-json-raw-btn';
     rawBtn.textContent = 'Raw';
-    rawBtn.title = 'Toggle raw JSON';
     toolbar.appendChild(rawBtn);
+
     this.node.appendChild(toolbar);
 
     // Tree view
@@ -31,27 +37,23 @@ export class JsonTabWidget extends Widget {
     this._buildJsonTree(data, tree, true);
     this.node.appendChild(tree);
 
-    // Raw view (hidden)
-    const raw = document.createElement('pre');
-    raw.className = 'hugr-json-raw';
-    raw.style.display = 'none';
-    raw.style.whiteSpace = 'pre-wrap';
-    raw.style.wordBreak = 'break-all';
-    raw.style.margin = '0';
-    try {
-      raw.textContent = JSON.stringify(data, null, 2);
-    } catch {
-      raw.textContent = String(data);
-    }
-    this.node.appendChild(raw);
+    // Raw view with syntax highlighting, line numbers, folding, bracket matching
+    const rawWrap = document.createElement('div');
+    rawWrap.className = 'hugr-json-raw';
+    rawWrap.style.display = 'none';
+    buildJsonRawView(data, rawWrap);
+    this.node.appendChild(rawWrap);
 
-    let showingRaw = false;
-    rawBtn.addEventListener('click', () => {
-      showingRaw = !showingRaw;
-      tree.style.display = showingRaw ? 'none' : '';
-      raw.style.display = showingRaw ? '' : 'none';
-      rawBtn.classList.toggle('hugr-json-raw-btn-active', showingRaw);
-    });
+    let mode: 'tree' | 'raw' = 'tree';
+    const setMode = (m: 'tree' | 'raw') => {
+      mode = m;
+      tree.style.display = m === 'tree' ? '' : 'none';
+      rawWrap.style.display = m === 'raw' ? '' : 'none';
+      treeBtn.classList.toggle('hugr-json-raw-btn-active', m === 'tree');
+      rawBtn.classList.toggle('hugr-json-raw-btn-active', m === 'raw');
+    };
+    treeBtn.addEventListener('click', () => setMode('tree'));
+    rawBtn.addEventListener('click', () => setMode('raw'));
   }
 
   private _buildJsonTree(data: any, parent: HTMLElement, expanded: boolean): void {

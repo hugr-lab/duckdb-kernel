@@ -33,6 +33,14 @@ func (k *Kernel) handleShellMessage(ctx context.Context, msg *Message) {
 		k.handleCompleteRequest(msg)
 	case "inspect_request":
 		k.handleInspectRequest(msg)
+	case "history_request":
+		k.handleHistoryRequest(msg)
+	case "comm_info_request":
+		k.handleCommInfoRequest(msg)
+	case "comm_open":
+		k.handleCommOpen(msg)
+	case "comm_msg":
+		// Silently ignore comm messages — no comms registered.
 	default:
 		log.Printf("unhandled shell message type: %s", msg.Header.MsgType)
 	}
@@ -76,6 +84,11 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 	}
 	if err := k.sendMessage(k.iopubSocket, inputMsg); err != nil {
 		log.Printf("send execute_input error: %v", err)
+	}
+
+	// Record in history
+	if code != "" {
+		k.history.Add(execCount, code)
 	}
 
 	// Empty input — no output
@@ -295,6 +308,43 @@ func (k *Kernel) handleInspectRequest(msg *Message) {
 	}
 	if err := k.sendMessage(k.shellSocket, reply); err != nil {
 		log.Printf("send inspect_reply error: %v", err)
+	}
+}
+
+func (k *Kernel) handleHistoryRequest(msg *Message) {
+	reply := NewMessage(msg, "history_reply")
+	reply.Content = map[string]any{
+		"status":  "ok",
+		"history": k.history.Entries(),
+	}
+	if err := k.sendMessage(k.shellSocket, reply); err != nil {
+		log.Printf("send history_reply error: %v", err)
+	}
+}
+
+func (k *Kernel) handleCommInfoRequest(msg *Message) {
+	reply := NewMessage(msg, "comm_info_reply")
+	reply.Content = map[string]any{
+		"status": "ok",
+		"comms":  map[string]any{},
+	}
+	if err := k.sendMessage(k.shellSocket, reply); err != nil {
+		log.Printf("send comm_info_reply error: %v", err)
+	}
+}
+
+func (k *Kernel) handleCommOpen(msg *Message) {
+	// No comms supported — send comm_close to signal rejection.
+	commID, _ := msg.Content["comm_id"].(string)
+	if commID == "" {
+		return
+	}
+	reply := NewMessage(msg, "comm_close")
+	reply.Content = map[string]any{
+		"comm_id": commID,
+	}
+	if err := k.sendMessage(k.iopubSocket, reply); err != nil {
+		log.Printf("send comm_close error: %v", err)
 	}
 }
 

@@ -29,7 +29,7 @@ type QueryResult struct {
 func BuildPreviewFromReader(
 	reader array.RecordReader,
 	previewLimit int,
-	onBatch func(rec arrow.Record) error,
+	onBatch func(rec arrow.RecordBatch) error,
 ) (*QueryResult, error) {
 	if reader == nil {
 		return &QueryResult{}, nil

@@ -46,6 +46,8 @@ type Kernel struct {
 	stdinSocket   zmq.Socket
 	hbSocket      zmq.Socket
 
+	history *History
+
 	shutdown     chan struct{}
 	shutdownOnce sync.Once
 }
@@ -60,6 +62,7 @@ func NewKernel(connInfo *ConnectionInfo, sess *session.Session, sp *spool.Spool)
 		shutdown: make(chan struct{}),
 	}
 	k.metaRegistry = meta.NewRegistry(sess.Engine, sess.SetPreviewLimit)
+	k.history = NewHistory(sess.ID)
 	return k
 }
 
