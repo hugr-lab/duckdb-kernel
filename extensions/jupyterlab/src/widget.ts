@@ -141,8 +141,16 @@ function buildFullUrl(arrowUrl: string): string {
   }
 }
 
-/** Cache of last known kernel base URL — updated on each execute result. */
+/** Cache of last known kernel base URL — updated on each execute result
+ *  and from plugin.ts kernel_info discovery (survives page reload). */
 let _lastKnownBaseUrl: string | null = null;
+
+// Listen for base URL updates from plugin.ts (kernel reconnect after reload)
+document.addEventListener('hugr:base-url-update', ((e: CustomEvent) => {
+  if (e.detail?.baseUrl) {
+    _lastKnownBaseUrl = e.detail.baseUrl;
+  }
+}) as EventListener);
 
 /** Rebuild Arrow URL using the latest known kernel base URL.
  *  Extracts queryID from old URL and builds new URL with current port. */
@@ -190,17 +198,24 @@ async function streamArrowToTable(
   perspectiveWorker: any,
   signal?: AbortSignal,
 ): Promise<any> {
-  // Try fetch, retry with rebuilt URL on connection error (port may have changed)
+  // Try fetch, retry with rebuilt URL on connection error (port may have changed after reload)
   let response: Response;
   try {
     response = await fetch(arrowUrl, { signal });
   } catch {
-    // Connection error — try rebuilding URL with latest known base URL
-    const rebuilt = rebuildArrowUrl(arrowUrl);
-    if (rebuilt !== arrowUrl) {
-      response = await fetch(rebuilt, { signal });
-    } else {
-      throw new Error(`Failed to connect to kernel at ${arrowUrl}`);
+    // Connection error — wait for kernel base URL discovery, then retry
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+      const rebuilt = rebuildArrowUrl(arrowUrl);
+      if (rebuilt !== arrowUrl) {
+        try {
+          response = await fetch(rebuilt, { signal });
+          break;
+        } catch { /* retry */ }
+      }
+    }
+    if (!response!) {
+      throw new Error(`Result unavailable. Re-run the cell to refresh.`);
     }
   }
   if (!response.ok) {
