@@ -587,7 +587,7 @@ function buildGeoArrowLayers(
         extruded: true,
         filled: true,
         flatShading: true,
-        opacity: 0.85,
+        opacity: currentOpacity,
         pickable: true,
       }));
     } else {
@@ -606,7 +606,7 @@ function buildGeoArrowLayers(
         radiusMinPixels: 2,
         stroked: true,
         lineWidthMinPixels: 1,
-        opacity: 0.85,
+        opacity: currentOpacity,
         pickable: true,
       }));
     }
@@ -627,7 +627,7 @@ function buildGeoArrowLayers(
       getWidth: sizeAcc || 2,
       widthUnits: 'pixels' as any,
       widthMinPixels: 1,
-      opacity: 0.85,
+      opacity: currentOpacity,
       pickable: true,
     } as any));
   }
@@ -645,7 +645,7 @@ function buildGeoArrowLayers(
       _normalize: false,
       getFillColor: colorAcc || FILL_COLOR,
       getLineColor: STROKE_COLOR,
-      opacity: 0.85,
+      opacity: currentOpacity,
       pickable: true,
       filled: true,
     } as any));
@@ -657,8 +657,11 @@ function buildGeoArrowLayers(
 /** Color scale mode. */
 type ColorScaleMode = 'quantize' | 'quantile' | 'log' | 'category' | 'identity';
 
-/** Current color scale mode (will be configurable via settings panel). */
+/** Current color scale mode — configurable via settings panel. */
 let currentColorScale: ColorScaleMode = 'quantize';
+
+/** Current layer opacity — configurable via settings panel. */
+let currentOpacity = 0.85;
 
 /** Build a color accessor for binary data format (index-based).
  *  Supports multiple scale modes: quantize, quantile, log, category, identity. */
@@ -1097,9 +1100,19 @@ function isDarkTheme(el: Element): boolean {
   return (r * 299 + g * 587 + b * 114) / 1000 < 128;
 }
 
-/** Get basemap URL based on theme. */
+/** Current basemap mode — configurable via settings panel. */
+let currentBasemapMode = 'auto';
+
+const BASEMAP_POSITRON = 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png';
+
+/** Get basemap URL based on mode and theme. */
 function getBasemapUrl(el: Element): string {
-  return isDarkTheme(el) ? BASEMAP_DARK : BASEMAP_LIGHT;
+  switch (currentBasemapMode) {
+    case 'voyager': return BASEMAP_LIGHT;
+    case 'positron': return BASEMAP_POSITRON;
+    case 'dark': return BASEMAP_DARK;
+    default: return isDarkTheme(el) ? BASEMAP_DARK : BASEMAP_LIGHT;
+  }
 }
 
 /** Categorical color palette (10 distinct colors). */
@@ -1177,7 +1190,7 @@ function buildMappedLayers(
       radiusMaxPixels: 40,
       stroked: true,
       lineWidthMinPixels: 1,
-      opacity: 0.85,
+      opacity: currentOpacity,
       pickable: true,
       updateTriggers: {
         getFillColor: [colorAccessor],
@@ -1195,7 +1208,7 @@ function buildMappedLayers(
       getWidth: sizeAccessor || 2,
       widthUnits: 'pixels' as any,
       widthMinPixels: 1,
-      opacity: 0.85,
+      opacity: currentOpacity,
       pickable: true,
       updateTriggers: {
         getColor: [colorAccessor],
@@ -1214,7 +1227,7 @@ function buildMappedLayers(
       getLineColor: STROKE_COLOR,
       getElevation: heightAccessor || 0,
       extruded,
-      opacity: 0.85,
+      opacity: currentOpacity,
       pickable: true,
       filled: true,
       updateTriggers: {
@@ -1233,7 +1246,7 @@ function buildMappedLayers(
       getLineColor: STROKE_COLOR,
       getElevation: heightAccessor || 0,
       extruded: !!heightAccessor,
-      opacity: 0.85,
+      opacity: currentOpacity,
       pickable: true,
       updateTriggers: {
         getFillColor: [colorAccessor],
@@ -1303,6 +1316,7 @@ export async function registerMapPlugin(): Promise<void> {
     private _tileSources: TileSourceMeta[] = [];
     private _geoData: GeoArrowData | null = null;
     private _tooltipColNames: string[] = [];
+    private _lastView: any = null;
 
     // --- Plugin identity ---
     get name() { return 'Geo Map'; }
@@ -1369,11 +1383,120 @@ export async function registerMapPlugin(): Promise<void> {
             border-radius: 50%;
             flex-shrink: 0;
           }
+          /* Settings panel */
+          #settings-toggle {
+            position:absolute; top:8px; left:8px; z-index:6;
+            width:32px; height:32px;
+            background: var(--map-element-background, rgba(255,255,255,0.92));
+            border: 1px solid var(--inactive--border-color, #dadada);
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 16px;
+            color: var(--icon--color, #161616);
+          }
+          #settings-toggle:hover { background: var(--active--color, #2670a9); color: #fff; }
+          #settings-panel {
+            position:absolute; top:0; left:0; bottom:0; z-index:5;
+            width: 220px;
+            background: var(--map-element-background, rgba(255,255,255,0.95));
+            border-right: 1px solid var(--inactive--border-color, #dadada);
+            color: var(--icon--color, #161616);
+            font: 11px/1.5 sans-serif;
+            overflow-y: auto;
+            padding: 8px 10px;
+            transform: translateX(-100%);
+            transition: transform 0.2s ease;
+          }
+          #settings-panel.open { transform: translateX(0); }
+          #settings-panel .sp-section {
+            margin-bottom: 10px;
+            border-bottom: 1px solid var(--inactive--border-color, #dadada);
+            padding-bottom: 8px;
+          }
+          #settings-panel .sp-section:last-child { border-bottom: none; }
+          #settings-panel .sp-title {
+            font-weight: bold;
+            font-size: 12px;
+            margin-bottom: 4px;
+          }
+          #settings-panel label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 3px 0;
+          }
+          #settings-panel select, #settings-panel input[type="range"] {
+            width: 110px;
+            background: var(--plugin--background, #fff);
+            color: var(--icon--color, #161616);
+            border: 1px solid var(--inactive--border-color, #dadada);
+            border-radius: 3px;
+            font-size: 11px;
+            padding: 1px 2px;
+          }
         </style>
         <div id="map-container"></div>
         <div id="legend" style="display:none"></div>
+        <div id="settings-toggle" title="Layer settings">☰</div>
+        <div id="settings-panel">
+          <div class="sp-section" id="sp-color">
+            <div class="sp-title">Color</div>
+            <label>Scale <select id="sp-color-scale">
+              <option value="quantize">Quantize</option>
+              <option value="quantile">Quantile</option>
+              <option value="log">Log</option>
+              <option value="category">Category</option>
+              <option value="identity">CSS Color</option>
+            </select></label>
+            <label>Palette <select id="sp-palette">
+              <option value="viridis">Viridis</option>
+              <option value="plasma">Plasma</option>
+              <option value="blues">Blues</option>
+              <option value="reds">Reds</option>
+              <option value="ylOrRd">YlOrRd</option>
+              <option value="greens">Greens</option>
+              <option value="rdBu">RdBu</option>
+              <option value="rdYlGn">RdYlGn</option>
+            </select></label>
+          </div>
+          <div class="sp-section" id="sp-opacity">
+            <div class="sp-title">Appearance</div>
+            <label>Opacity <input type="range" id="sp-opacity-slider" min="0" max="100" value="85"></label>
+            <label>Basemap <select id="sp-basemap">
+              <option value="auto">Auto</option>
+              <option value="voyager">Voyager</option>
+              <option value="positron">Positron</option>
+              <option value="dark">Dark Matter</option>
+            </select></label>
+          </div>
+        </div>
       `;
       this._container = this.shadowRoot!.getElementById('map-container') as HTMLDivElement;
+
+      // Settings panel toggle
+      const toggle = this.shadowRoot!.getElementById('settings-toggle')!;
+      const panel = this.shadowRoot!.getElementById('settings-panel')!;
+      toggle.addEventListener('click', () => panel.classList.toggle('open'));
+
+      // Settings change handlers
+      const redraw = () => { if (this._deck) this.draw(this._lastView); };
+      this.shadowRoot!.getElementById('sp-color-scale')!.addEventListener('change', (e) => {
+        currentColorScale = (e.target as HTMLSelectElement).value as ColorScaleMode;
+        redraw();
+      });
+      this.shadowRoot!.getElementById('sp-palette')!.addEventListener('change', (e) => {
+        currentPalette = (e.target as HTMLSelectElement).value;
+        redraw();
+      });
+      this.shadowRoot!.getElementById('sp-opacity-slider')!.addEventListener('input', (e) => {
+        currentOpacity = Number((e.target as HTMLInputElement).value) / 100;
+        redraw();
+      });
+      this.shadowRoot!.getElementById('sp-basemap')!.addEventListener('change', (e) => {
+        currentBasemapMode = (e.target as HTMLSelectElement).value;
+        redraw();
+      });
     }
 
     /** Read null-padded slot columns from the viewer.
@@ -1399,6 +1522,7 @@ export async function registerMapPlugin(): Promise<void> {
 
     async draw(view: any) {
       if (!this._container) return;
+      this._lastView = view;
 
       const viewer = this.parentElement as any;
 
