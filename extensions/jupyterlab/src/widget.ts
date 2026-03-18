@@ -141,6 +141,40 @@ function buildFullUrl(arrowUrl: string): string {
   }
 }
 
+/** Cache of last known kernel base URL — updated on each execute result. */
+let _lastKnownBaseUrl: string | null = null;
+
+/** Rebuild Arrow URL using the latest known kernel base URL.
+ *  Extracts queryID from old URL and builds new URL with current port. */
+function rebuildArrowUrl(oldUrl: string, baseUrl?: string): string {
+  const base = baseUrl || _lastKnownBaseUrl;
+  if (!base) return oldUrl;
+  try {
+    const old = new URL(oldUrl);
+    const q = old.searchParams.get('q');
+    if (!q) return oldUrl;
+    // Build new URL with same path and params but different host:port
+    return `${base}${old.pathname}?q=${q}`;
+  } catch {
+    return oldUrl;
+  }
+}
+
+/** Fetch Arrow data with retry — on connection error, try with rebuilt URL. */
+async function fetchArrowWithRetry(url: string, baseUrl?: string): Promise<Response> {
+  try {
+    const resp = await fetch(url);
+    if (resp.ok) return resp;
+  } catch {
+    // Connection error — try with rebuilt URL
+  }
+  const rebuilt = rebuildArrowUrl(url, baseUrl);
+  if (rebuilt !== url) {
+    return fetch(rebuilt);
+  }
+  throw new Error(`Failed to fetch Arrow data from ${url}`);
+}
+
 /** Escape HTML to prevent XSS in innerHTML. */
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -156,7 +190,19 @@ async function streamArrowToTable(
   perspectiveWorker: any,
   signal?: AbortSignal,
 ): Promise<any> {
-  const response = await fetch(arrowUrl, { signal });
+  // Try fetch, retry with rebuilt URL on connection error (port may have changed)
+  let response: Response;
+  try {
+    response = await fetch(arrowUrl, { signal });
+  } catch {
+    // Connection error — try rebuilding URL with latest known base URL
+    const rebuilt = rebuildArrowUrl(arrowUrl);
+    if (rebuilt !== arrowUrl) {
+      response = await fetch(rebuilt, { signal });
+    } else {
+      throw new Error(`Failed to connect to kernel at ${arrowUrl}`);
+    }
+  }
   if (!response.ok) {
     throw new Error(`Failed to fetch Arrow data (HTTP ${response.status})`);
   }
@@ -242,6 +288,11 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
     if (!metadata) {
       this._showError('No result metadata available.');
       return;
+    }
+
+    // Cache kernel base URL for URL rebuilding on page reload
+    if (metadata.base_url) {
+      _lastKnownBaseUrl = metadata.base_url;
     }
 
     // Multipart response with parts array
