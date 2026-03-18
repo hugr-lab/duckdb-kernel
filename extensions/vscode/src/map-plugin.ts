@@ -11,7 +11,7 @@
  */
 
 import { Deck } from '@deck.gl/core';
-import { ScatterplotLayer, SolidPolygonLayer, PathLayer, BitmapLayer } from '@deck.gl/layers';
+import { ScatterplotLayer, SolidPolygonLayer, PathLayer, BitmapLayer, ColumnLayer } from '@deck.gl/layers';
 import { H3HexagonLayer, TileLayer } from '@deck.gl/geo-layers';
 
 /** Geometry column metadata passed from the renderer. */
@@ -527,12 +527,37 @@ async function loadGeoArrowData(
   return { extensionName, flatCoords, startIndices, numRows: totalRows, bbox, table: mergedTable, geomColIdx };
 }
 
+/** Build Float32Array elevation from height column values with auto-scale.
+ *  Returns null if no height column. */
+function buildElevationAttribute(
+  geoData: GeoArrowData,
+  heightColName: string | null,
+): { elevationArr: Float32Array; elevationScale: number } | null {
+  if (!heightColName) return null;
+  const colIdx = geoData.table.schema.fields.findIndex((f: any) => f.name === heightColName);
+  if (colIdx === -1) return null;
+  const values = geoData.table.propColData?.get(colIdx);
+  if (!values) return null;
+
+  const elevationArr = new Float32Array(geoData.numRows);
+  let dataMax = 0;
+  for (let i = 0; i < geoData.numRows; i++) {
+    const v = Number(values[i]);
+    elevationArr[i] = isFinite(v) ? Math.max(0, v) : 0;
+    if (elevationArr[i] > dataMax) dataMax = elevationArr[i];
+  }
+
+  // Auto-scale: target max visual height ~500m for sensible 3D at city zoom
+  const elevationScale = dataMax > 0 ? 500 / dataMax : 1;
+  return { elevationArr, elevationScale };
+}
+
 /** Build deck.gl layers from GeoArrow binary data — zero JS objects. */
 function buildGeoArrowLayers(
   geoData: GeoArrowData,
   colorAcc: any,
   sizeAcc: any,
-  heightAcc: any,
+  heightColName: string | null,
 ): any[] {
   const layers: any[] = [];
   const ext = geoData.extensionName;
@@ -540,25 +565,51 @@ function buildGeoArrowLayers(
   const isLine = ext === 'geoarrow.linestring' || ext === 'geoarrow.multilinestring';
   const isPolygon = ext === 'geoarrow.polygon' || ext === 'geoarrow.multipolygon';
 
+  const elev = buildElevationAttribute(geoData, heightColName);
+
   if (isPoint) {
-    layers.push(new ScatterplotLayer({
-      id: 'hugr-map-points',
-      data: {
-        length: geoData.numRows,
-        attributes: {
-          getPosition: { value: geoData.flatCoords, size: 2 },
+    if (elev) {
+      // Extruded columns for points with height
+      layers.push(new ColumnLayer({
+        id: 'hugr-map-point-columns',
+        data: {
+          length: geoData.numRows,
+          attributes: {
+            getPosition: { value: geoData.flatCoords, size: 2 },
+            getElevation: { value: elev.elevationArr, size: 1 },
+          },
         },
-      },
-      getFillColor: colorAcc || FILL_COLOR,
-      getLineColor: STROKE_COLOR,
-      getRadius: sizeAcc || 6,
-      radiusUnits: 'pixels' as any,
-      radiusMinPixels: 2,
-      stroked: true,
-      lineWidthMinPixels: 1,
-      opacity: 0.85,
-      pickable: true,
-    }));
+        getFillColor: colorAcc || FILL_COLOR,
+        getLineColor: STROKE_COLOR,
+        diskResolution: 20,
+        radius: sizeAcc ? undefined : 100,
+        getRadius: sizeAcc || 100,
+        radiusUnits: 'meters' as any,
+        elevationScale: elev.elevationScale,
+        extruded: true,
+        opacity: 0.85,
+        pickable: true,
+      }));
+    } else {
+      layers.push(new ScatterplotLayer({
+        id: 'hugr-map-points',
+        data: {
+          length: geoData.numRows,
+          attributes: {
+            getPosition: { value: geoData.flatCoords, size: 2 },
+          },
+        },
+        getFillColor: colorAcc || FILL_COLOR,
+        getLineColor: STROKE_COLOR,
+        getRadius: sizeAcc || 6,
+        radiusUnits: 'pixels' as any,
+        radiusMinPixels: 2,
+        stroked: true,
+        lineWidthMinPixels: 1,
+        opacity: 0.85,
+        pickable: true,
+      }));
+    }
   }
 
   if (isLine) {
@@ -582,20 +633,25 @@ function buildGeoArrowLayers(
   }
 
   if (isPolygon) {
+    const polyData: any = {
+      length: geoData.numRows,
+      startIndices: geoData.startIndices,
+      attributes: {
+        getPolygon: { value: geoData.flatCoords, size: 2 },
+      },
+    };
+    if (elev) {
+      polyData.attributes.getElevation = { value: elev.elevationArr, size: 1 };
+    }
+
     layers.push(new SolidPolygonLayer({
       id: 'hugr-map-polygons',
-      data: {
-        length: geoData.numRows,
-        startIndices: geoData.startIndices,
-        attributes: {
-          getPolygon: { value: geoData.flatCoords, size: 2 },
-        },
-      },
+      data: polyData,
       _normalize: false,
       getFillColor: colorAcc || FILL_COLOR,
       getLineColor: STROKE_COLOR,
-      getElevation: heightAcc || 0,
-      extruded: !!heightAcc,
+      elevationScale: elev?.elevationScale || 1,
+      extruded: !!elev,
       opacity: 0.85,
       pickable: true,
       filled: true,
@@ -1281,20 +1337,20 @@ export async function registerMapPlugin(): Promise<void> {
           const sizeAcc = sizeColName
             ? buildBinaryFloatAccessor(geoData.table, sizeColName)
             : null;
-          const heightAcc = heightColName
-            ? buildBinaryFloatAccessor(geoData.table, heightColName)
-            : null;
 
           const isFirstDraw = this._deck === null;
           if (isFirstDraw) {
             this._viewState = computeViewState(geoData.bbox);
-            if (heightColName) this._viewState.pitch = 45;
+            if (heightColName) {
+              this._viewState.pitch = 45;
+              this._viewState.bearing = 15;
+            }
           }
 
           this._geoData = geoData;
           this._tooltipColNames = tooltipColNames;
 
-          const dataLayers = buildGeoArrowLayers(geoData, colorAcc, sizeAcc, heightAcc);
+          const dataLayers = buildGeoArrowLayers(geoData, colorAcc, sizeAcc, heightColName);
           this._renderDeckLayers(dataLayers);
         } else {
           // ── WKB / fallback path ──
