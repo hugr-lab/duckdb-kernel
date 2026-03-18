@@ -579,7 +579,7 @@ function buildGeoArrowLayers(
             getElevation: { value: elev.elevationArr, size: 1 },
           },
         },
-        getFillColor: colorAcc || FILL_COLOR,
+        getFillColor: colorAcc || currentDefaultColor,
         getLineColor: STROKE_COLOR,
         diskResolution: 20,
         radius: 30,
@@ -599,9 +599,9 @@ function buildGeoArrowLayers(
             getPosition: { value: geoData.flatCoords, size: 2 },
           },
         },
-        getFillColor: colorAcc || FILL_COLOR,
+        getFillColor: colorAcc || currentDefaultColor,
         getLineColor: STROKE_COLOR,
-        getRadius: sizeAcc || 6,
+        getRadius: sizeAcc || currentDefaultSize,
         radiusUnits: 'pixels' as any,
         radiusMinPixels: 2,
         stroked: true,
@@ -623,8 +623,8 @@ function buildGeoArrowLayers(
         },
       },
       _pathType: 'open',
-      getColor: colorAcc || FILL_COLOR,
-      getWidth: sizeAcc || 2,
+      getColor: colorAcc || currentDefaultColor,
+      getWidth: sizeAcc || currentDefaultSize,
       widthUnits: 'pixels' as any,
       widthMinPixels: 1,
       opacity: currentOpacity,
@@ -643,7 +643,7 @@ function buildGeoArrowLayers(
         },
       },
       _normalize: false,
-      getFillColor: colorAcc || FILL_COLOR,
+      getFillColor: colorAcc || currentDefaultColor,
       getLineColor: STROKE_COLOR,
       opacity: currentOpacity,
       pickable: true,
@@ -752,6 +752,8 @@ function buildBinaryColorAccessor(
 type SizeScaleMode = 'linear' | 'sqrt' | 'log' | 'identity';
 let currentSizeScale: SizeScaleMode = 'linear';
 let currentSizeRange: [number, number] = [2, 30];
+let currentDefaultSize = 6;
+let currentDefaultColor: [number, number, number, number] = [65, 135, 220, 180];
 
 /** Build a float accessor for binary data (index-based) with scale. */
 function buildBinaryFloatAccessor(
@@ -1362,6 +1364,17 @@ export async function registerMapPlugin(): Promise<void> {
     private _geoData: GeoArrowData | null = null;
     private _tooltipColNames: string[] = [];
     private _lastView: any = null;
+    private _lastSchema: Record<string, string> = {};
+    private _lastColumns: (string | null)[] = [];
+    // Per-instance settings (synced to module-level before draw)
+    private _defaultColor: [number, number, number, number] = [65, 135, 220, 180];
+    private _defaultSize: number = 6;
+    private _colorScale: ColorScaleMode = 'quantize';
+    private _palette: string = 'viridis';
+    private _opacity: number = 0.85;
+    private _basemap: string = 'auto';
+    private _sizeScale: SizeScaleMode = 'linear';
+    private _sizeRange: [number, number] = [2, 30];
 
     // --- Plugin identity ---
     get name() { return 'Geo Map'; }
@@ -1449,7 +1462,7 @@ export async function registerMapPlugin(): Promise<void> {
             color: var(--icon--color, #161616);
             font: 11px/1.5 sans-serif;
             overflow-y: auto;
-            padding: 8px 10px;
+            padding: 44px 10px 8px 10px;
             transform: translateX(-100%);
             transition: transform 0.2s ease;
           }
@@ -1487,6 +1500,7 @@ export async function registerMapPlugin(): Promise<void> {
         <div id="settings-panel">
           <div class="sp-section" id="sp-color">
             <div class="sp-title">Color</div>
+            <label>Default <input type="color" id="sp-default-color" value="#4187dc" style="width:40px;height:22px;padding:0;border:1px solid var(--inactive--border-color,#dadada);cursor:pointer"></label>
             <label>Scale <select id="sp-color-scale">
               <option value="quantize">Quantize</option>
               <option value="quantile">Quantile</option>
@@ -1507,6 +1521,7 @@ export async function registerMapPlugin(): Promise<void> {
           </div>
           <div class="sp-section" id="sp-size">
             <div class="sp-title">Size / Width</div>
+            <label>Default <input type="range" id="sp-default-size" min="1" max="30" value="6"></label>
             <label>Scale <select id="sp-size-scale">
               <option value="linear">Linear</option>
               <option value="sqrt">Sqrt</option>
@@ -1536,33 +1551,72 @@ export async function registerMapPlugin(): Promise<void> {
       toggle.addEventListener('click', () => panel.classList.toggle('open'));
 
       // Settings change handlers
-      const redraw = () => { if (this._deck) this.draw(this._lastView); };
+      // Lightweight redraw: rebuild layers from cached data, no refetch
+      const redraw = () => {
+        if (!this._deck || !this._lastView) return;
+        this._syncSettings();
+        // If we have GeoArrow data cached, rebuild layers from it
+        if (this._geoData) {
+          const viewer = this.parentElement as any;
+          let schema: Record<string, string> = {};
+          try {
+            // Use cached schema from last draw — avoid async view.schema()
+            const cols = this._deck.props?.layers?.length || 0;
+            schema = this._lastSchema || {};
+          } catch {}
+          const columns = this._lastColumns || [];
+          const colorColName = columns[1] || null;
+          const sizeColName = columns[2] || null;
+          const heightColName = columns[3] || null;
+          const colorAcc = colorColName
+            ? buildBinaryColorAccessor(this._geoData.table, colorColName, this._lastSchema?.[colorColName] || 'string', this._geoData.geomColIdx)
+            : null;
+          const sizeAcc = sizeColName
+            ? buildBinaryFloatAccessor(this._geoData.table, sizeColName)
+            : null;
+          const dataLayers = buildGeoArrowLayers(this._geoData, colorAcc, sizeAcc, heightColName);
+          this._renderDeckLayers(dataLayers);
+          this._updateLegend(colorColName, colorColName ? this._lastSchema?.[colorColName] || 'string' : 'string', this._geoData);
+        } else {
+          this.draw(this._lastView);
+        }
+      };
+      this.shadowRoot!.getElementById('sp-default-color')!.addEventListener('input', (e) => {
+        const hex = (e.target as HTMLInputElement).value;
+        const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+        this._defaultColor = [r, g, b, 200];
+        redraw();
+      });
       this.shadowRoot!.getElementById('sp-color-scale')!.addEventListener('change', (e) => {
-        currentColorScale = (e.target as HTMLSelectElement).value as ColorScaleMode;
+        this._colorScale = (e.target as HTMLSelectElement).value as ColorScaleMode;
         redraw();
       });
       this.shadowRoot!.getElementById('sp-palette')!.addEventListener('change', (e) => {
-        currentPalette = (e.target as HTMLSelectElement).value;
+        this._palette = (e.target as HTMLSelectElement).value;
+        redraw();
+      });
+      this.shadowRoot!.getElementById('sp-default-size')!.addEventListener('input', (e) => {
+        this._defaultSize = Number((e.target as HTMLInputElement).value);
         redraw();
       });
       this.shadowRoot!.getElementById('sp-size-scale')!.addEventListener('change', (e) => {
-        currentSizeScale = (e.target as HTMLSelectElement).value as SizeScaleMode;
+        this._sizeScale = (e.target as HTMLSelectElement).value as SizeScaleMode;
         redraw();
       });
       this.shadowRoot!.getElementById('sp-size-min')!.addEventListener('input', (e) => {
-        currentSizeRange[0] = Number((e.target as HTMLInputElement).value);
+        this._sizeRange = [Number((e.target as HTMLInputElement).value), this._sizeRange[1]];
         redraw();
       });
       this.shadowRoot!.getElementById('sp-size-max')!.addEventListener('input', (e) => {
-        currentSizeRange[1] = Number((e.target as HTMLInputElement).value);
+        this._sizeRange = [this._sizeRange[0], Number((e.target as HTMLInputElement).value)];
         redraw();
       });
       this.shadowRoot!.getElementById('sp-opacity-slider')!.addEventListener('input', (e) => {
-        currentOpacity = Number((e.target as HTMLInputElement).value) / 100;
+        this._opacity = Number((e.target as HTMLInputElement).value) / 100;
         redraw();
       });
       this.shadowRoot!.getElementById('sp-basemap')!.addEventListener('change', (e) => {
-        currentBasemapMode = (e.target as HTMLSelectElement).value;
+        this._basemap = (e.target as HTMLSelectElement).value;
         redraw();
       });
     }
@@ -1588,9 +1642,22 @@ export async function registerMapPlugin(): Promise<void> {
       return rawCols;
     }
 
+    /** Sync per-instance settings to module-level variables before draw. */
+    private _syncSettings() {
+      currentColorScale = this._colorScale;
+      currentPalette = this._palette;
+      currentOpacity = this._opacity;
+      currentBasemapMode = this._basemap;
+      currentSizeScale = this._sizeScale;
+      currentSizeRange = this._sizeRange;
+      currentDefaultSize = this._defaultSize;
+      currentDefaultColor = this._defaultColor;
+    }
+
     async draw(view: any) {
       if (!this._container) return;
       this._lastView = view;
+      this._syncSettings();
 
       const viewer = this.parentElement as any;
 
@@ -1651,6 +1718,8 @@ export async function registerMapPlugin(): Promise<void> {
       // Get schema for column type info
       let schema: Record<string, string> = {};
       try { schema = await view.schema(); } catch {}
+      this._lastSchema = schema;
+      this._lastColumns = columns;
 
       const arrowUrl = viewer?.getAttribute('data-arrow-url') || null;
 
@@ -2076,23 +2145,23 @@ export async function registerMapPlugin(): Promise<void> {
     save() {
       return {
         viewState: this._viewState,
-        colorScale: currentColorScale,
-        palette: currentPalette,
-        opacity: currentOpacity,
-        basemap: currentBasemapMode,
-        sizeScale: currentSizeScale,
-        sizeRange: currentSizeRange,
+        colorScale: this._colorScale,
+        palette: this._palette,
+        opacity: this._opacity,
+        basemap: this._basemap,
+        sizeScale: this._sizeScale,
+        sizeRange: this._sizeRange,
       };
     }
     async restore(config: any) {
       if (!config) return;
       if (config.viewState) this._viewState = config.viewState;
-      if (config.colorScale) currentColorScale = config.colorScale;
-      if (config.palette) currentPalette = config.palette;
-      if (config.opacity != null) currentOpacity = config.opacity;
-      if (config.basemap) currentBasemapMode = config.basemap;
-      if (config.sizeScale) currentSizeScale = config.sizeScale;
-      if (config.sizeRange) currentSizeRange = config.sizeRange;
+      if (config.colorScale) this._colorScale = config.colorScale;
+      if (config.palette) this._palette = config.palette;
+      if (config.opacity != null) this._opacity = config.opacity;
+      if (config.basemap) this._basemap = config.basemap;
+      if (config.sizeScale) this._sizeScale = config.sizeScale;
+      if (config.sizeRange) this._sizeRange = config.sizeRange;
 
       // Sync UI controls
       const sr = this.shadowRoot;
