@@ -165,11 +165,18 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 	defer closer.Close()
 	defer reader.Release()
 
-	// For Perspective: wrap reader to replace geometry columns with string "{geometry}".
-	// For deck.gl (?geoarrow=1): serve as-is.
+	// Build reader pipeline:
+	// 1. Column projection (if requested)
+	// 2. String replacement for Perspective (if not geoarrow mode)
 	var source array.RecordReader = reader
+	if projCols != nil {
+		source = geoarrow.NewProjector(source, projCols)
+		if source != reader {
+			defer source.(interface{ Release() }).Release()
+		}
+	}
 	if !wantGeoArrow {
-		replacer := geoarrow.NewStringReplacer(reader)
+		replacer := geoarrow.NewStringReplacer(source)
 		defer replacer.Release()
 		source = replacer
 	}
@@ -198,19 +205,6 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 			sliced = true
 			rows = need
 			last = true
-		}
-
-		// Apply column projection if requested
-		if projCols != nil {
-			projected := projectColumns(writeRec, projCols)
-			if projected != nil {
-				if sliced {
-					writeRec.Release()
-					sliced = false
-				}
-				writeRec = projected
-				defer projected.Release()
-			}
 		}
 
 		if outSchema == nil {
@@ -259,32 +253,6 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 	if canFlush {
 		flusher.Flush()
 	}
-}
-
-// projectColumns returns a new RecordBatch with only the requested columns.
-// Returns nil if no projection needed (all columns requested).
-func projectColumns(rec arrow.RecordBatch, cols map[string]bool) arrow.RecordBatch {
-	schema := rec.Schema()
-	var indices []int
-	for i, f := range schema.Fields() {
-		if cols[f.Name] {
-			indices = append(indices, i)
-		}
-	}
-	if len(indices) == len(schema.Fields()) || len(indices) == 0 {
-		return nil // no projection needed
-	}
-
-	fields := make([]arrow.Field, len(indices))
-	arrays := make([]arrow.Array, len(indices))
-	for i, idx := range indices {
-		fields[i] = schema.Field(idx)
-		arrays[i] = rec.Column(idx)
-	}
-
-	meta := schema.Metadata()
-	newSchema := arrow.NewSchema(fields, &meta)
-	return array.NewRecordBatch(newSchema, arrays, rec.NumRows())
 }
 
 // streamRawFile sends the Arrow IPC file directly without parsing.

@@ -853,6 +853,11 @@ const DEFAULT_STYLE: MapStyle = {
 };
 
 /** Parse a CSS color string to RGBA. Returns null if not a color. */
+/** Escape HTML special characters to prevent XSS in tooltips. */
+function escHtml(s: string): string {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 function parseCssColor(s: string): [number, number, number, number] | null {
   if (!s || typeof s !== 'string') return null;
   const t = s.trim().toLowerCase();
@@ -1097,7 +1102,7 @@ function formatTooltip(feature: FeatureRow): string {
   const parts: string[] = [];
   const entries = Object.entries(feature.properties).filter(([, v]) => v !== null && v !== undefined);
   if (entries.length > 0) {
-    parts.push(...entries.map(([k, v]) => `<b>${k}</b>: ${v}`));
+    parts.push(...entries.map(([k, v]) => `<b>${escHtml(k)}</b>: ${escHtml(String(v))}`));
   }
   // Measurement info
   if (feature.polygon && feature.polygon.length >= 3) {
@@ -1117,20 +1122,6 @@ function formatTooltip(feature: FeatureRow): string {
  * Register the map plugin with Perspective.
  * Must be called after Perspective custom elements are defined.
  */
-/** Convert [r,g,b,a] to hex color string. */
-function rgbToHex(c: [number, number, number, number]): string {
-  return '#' + [c[0], c[1], c[2]].map(v => v.toString(16).padStart(2, '0')).join('');
-}
-
-/** Convert hex color string to [r,g,b,a]. */
-function hexToRgba(hex: string, alpha: number): [number, number, number, number] {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return [r, g, b, alpha];
-}
-
-/** Default OSM tile URL for basemap when no tile sources configured. */
 /** CARTO basemap URLs. Free, no API key required. */
 const BASEMAP_LIGHT = 'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png';
 const BASEMAP_DARK = 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png';
@@ -2008,18 +1999,21 @@ export async function registerMapPlugin(): Promise<void> {
       legend.style.display = '';
 
       if (colType === 'string' || colType === 'boolean') {
-        // Categorical legend
+        // Categorical legend — insertion order matches buildBinaryColorAccessor
+        const valMap = new Map<string, number>(); // value → first-seen index
         const counts = new Map<string, number>();
         for (const v of values) {
           const s = String(v ?? '');
+          if (!valMap.has(s)) valMap.set(s, valMap.size);
           counts.set(s, (counts.get(s) || 0) + 1);
         }
-        const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
-        const items = sorted.map(([val, count], i) => {
-          const c = CATEGORY_COLORS[i % CATEGORY_COLORS.length];
-          return `<div class="legend-cat-item"><span class="legend-cat-dot" style="background:rgb(${c[0]},${c[1]},${c[2]})"></span>${val} <span style="color:var(--inactive--color,#888)">(${count.toLocaleString()})</span></div>`;
+        const entries = [...valMap.entries()].slice(0, 10);
+        const items = entries.map(([val, idx]) => {
+          const c = CATEGORY_COLORS[idx % CATEGORY_COLORS.length];
+          const count = counts.get(val) || 0;
+          return `<div class="legend-cat-item"><span class="legend-cat-dot" style="background:rgb(${c[0]},${c[1]},${c[2]})"></span>${escHtml(val)} <span style="color:var(--inactive--color,#888)">(${count.toLocaleString()})</span></div>`;
         }).join('');
-        legend.innerHTML = `<div class="legend-title">${colorColName}</div>${items}`;
+        legend.innerHTML = `<div class="legend-title">${escHtml(colorColName!)}</div>${items}`;
       } else {
         // Numeric gradient legend
         let min = Infinity, max = -Infinity;
@@ -2035,7 +2029,7 @@ export async function registerMapPlugin(): Promise<void> {
           stops.push(`rgb(${c[0]},${c[1]},${c[2]})`);
         }
         legend.innerHTML = `
-          <div class="legend-title">${colorColName}</div>
+          <div class="legend-title">${escHtml(colorColName!)}</div>
           <div class="legend-gradient" style="background:linear-gradient(to right,${stops.join(',')})"></div>
           <div class="legend-labels"><span>${min.toLocaleString()}</span><span>${max.toLocaleString()}</span></div>
         `;
@@ -2111,7 +2105,7 @@ export async function registerMapPlugin(): Promise<void> {
         if (!tooltipSet.has(name)) continue;
         const val = values[index];
         if (val === null || val === undefined) continue;
-        parts.push(`<b>${name}</b>: ${val}`);
+        parts.push(`<b>${escHtml(name)}</b>: ${escHtml(String(val))}`);
       }
 
       return parts.length > 0
@@ -2121,9 +2115,16 @@ export async function registerMapPlugin(): Promise<void> {
 
     async update(view: any) { await this.draw(view); }
 
+    disconnectedCallback() {
+      if (this._deck) { this._deck.finalize(); this._deck = null; }
+      this._geoData = null;
+      this._lastView = null;
+    }
+
     async clear() {
       if (this._deck) { this._deck.finalize(); this._deck = null; }
       if (this._container) this._container.innerHTML = '';
+      this._geoData = null;
     }
 
     async resize() { if (this._deck) this._deck.redraw(); }
@@ -2170,13 +2171,13 @@ export async function registerMapPlugin(): Promise<void> {
           const el = sr.getElementById(id) as HTMLSelectElement | HTMLInputElement | null;
           if (el) el.value = val;
         };
-        setVal('sp-color-scale', currentColorScale);
-        setVal('sp-palette', currentPalette);
-        setVal('sp-opacity-slider', String(Math.round(currentOpacity * 100)));
-        setVal('sp-basemap', currentBasemapMode);
-        setVal('sp-size-scale', currentSizeScale);
-        setVal('sp-size-min', String(currentSizeRange[0]));
-        setVal('sp-size-max', String(currentSizeRange[1]));
+        setVal('sp-color-scale', this._colorScale);
+        setVal('sp-palette', this._palette);
+        setVal('sp-opacity-slider', String(Math.round(this._opacity * 100)));
+        setVal('sp-basemap', this._basemap);
+        setVal('sp-size-scale', this._sizeScale);
+        setVal('sp-size-min', String(this._sizeRange[0]));
+        setVal('sp-size-max', String(this._sizeRange[1]));
       }
     }
     delete() { this.clear(); }
