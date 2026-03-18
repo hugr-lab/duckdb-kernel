@@ -66,7 +66,16 @@ func NewArrowServer(sp *spool.Spool, introspector *engine.Introspector) (*ArrowS
 		}
 	}
 
-	as.server = &http.Server{Handler: mux}
+	// Wrap all handlers with CORS headers (needed for cross-origin fetch from JupyterLab)
+	as.server = &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})}
 
 	go func() {
 		if err := as.server.Serve(ln); err != nil && err != http.ErrServerClosed {
