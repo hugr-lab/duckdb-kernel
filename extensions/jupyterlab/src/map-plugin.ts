@@ -918,8 +918,26 @@ function hexToRgba(hex: string, alpha: number): [number, number, number, number]
 }
 
 /** Default OSM tile URL for basemap when no tile sources configured. */
-/** CARTO Positron — light, clean basemap. Free, no API key required. */
-const DEFAULT_TILE_URL = 'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png';
+/** CARTO basemap URLs. Free, no API key required. */
+const BASEMAP_LIGHT = 'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png';
+const BASEMAP_DARK = 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png';
+
+/** Detect if the current Perspective theme is dark by checking --plugin--background luminance. */
+function isDarkTheme(el: Element): boolean {
+  const bg = getComputedStyle(el).getPropertyValue('--plugin--background').trim();
+  if (!bg || bg === 'transparent' || !bg.startsWith('#')) return false;
+  const hex = bg.replace('#', '');
+  if (hex.length < 6) return false;
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  return (r * 299 + g * 587 + b * 114) / 1000 < 128;
+}
+
+/** Get basemap URL based on theme. */
+function getBasemapUrl(el: Element): string {
+  return isDarkTheme(el) ? BASEMAP_DARK : BASEMAP_LIGHT;
+}
 
 /** Categorical color palette (10 distinct colors). */
 const CATEGORY_COLORS: [number, number, number, number][] = [
@@ -1087,32 +1105,8 @@ export async function registerMapPlugin(): Promise<void> {
   `;
   document.head.appendChild(iconStyle);
 
-  // Inject shadow DOM CSS rule for the "Geo Map" plugin icon.
-  // Perspective's shadow DOM uses [data-plugin="Name"]:before with mask-image.
-  // We observe viewers appearing and inject the rule into their shadow roots.
-  const injectGeoMapIcon = (viewer: Element) => {
-    const sr = viewer.shadowRoot;
-    if (!sr || sr.querySelector('#geo-map-icon-style')) return;
-    const s = document.createElement('style');
-    s.id = 'geo-map-icon-style';
-    s.textContent = `.plugin-select-item[data-plugin="Geo Map"]:before { -webkit-mask-image: var(--plugin-selector-geo-map--content); mask-image: var(--plugin-selector-geo-map--content); }`;
-    sr.appendChild(s);
-  };
-
-  // Inject into existing viewers
-  document.querySelectorAll('perspective-viewer').forEach(injectGeoMapIcon);
-
-  // Watch for new viewers
-  new MutationObserver((mutations) => {
-    for (const m of mutations) {
-      for (const n of m.addedNodes) {
-        if (n instanceof Element) {
-          if (n.tagName === 'PERSPECTIVE-VIEWER') injectGeoMapIcon(n);
-          n.querySelectorAll?.('perspective-viewer').forEach(injectGeoMapIcon);
-        }
-      }
-    }
-  }).observe(document.body, { childList: true, subtree: true });
+  // Note: icon + hide-UI styles are injected from the plugin's draw() method
+  // via _injectViewerStyles(), which has access to the parent viewer element.
 
   customElements.define('perspective-viewer-map', class extends HTMLElement {
     private _deck: any = null;
@@ -1121,6 +1115,8 @@ export async function registerMapPlugin(): Promise<void> {
     private _geomType: number = 0;
     private _viewState: MapViewState = { longitude: 0, latitude: 0, zoom: 2, pitch: 0, bearing: 0 };
     private _tileSources: TileSourceMeta[] = [];
+    private _geoData: GeoArrowData | null = null;
+    private _tooltipColName: string | null = null;
 
     // --- Plugin identity ---
     get name() { return 'Geo Map'; }
@@ -1179,6 +1175,9 @@ export async function registerMapPlugin(): Promise<void> {
       if (!this._container) return;
 
       const viewer = this.parentElement as any;
+
+      // Inject/update styles in viewer shadow DOM (icon, hide UI)
+      this._injectViewerStyles();
 
       // Read geometry metadata
       let geomMeta: GeometryColumnMeta[] = [];
@@ -1267,6 +1266,9 @@ export async function registerMapPlugin(): Promise<void> {
             this._viewState = computeViewState(geoData.bbox);
             if (heightColName) this._viewState.pitch = 45;
           }
+
+          this._geoData = geoData;
+          this._tooltipColName = tooltipColName;
 
           const dataLayers = buildGeoArrowLayers(geoData, colorAcc, sizeAcc, heightAcc);
           this._renderDeckLayers(dataLayers);
@@ -1389,8 +1391,8 @@ export async function registerMapPlugin(): Promise<void> {
         basemapLayers = buildBasemapLayers(this._tileSources);
       } else {
         basemapLayers = buildBasemapLayers([{
-          name: 'CARTO Voyager',
-          url: DEFAULT_TILE_URL,
+          name: 'CARTO Auto',
+          url: getBasemapUrl(this.parentElement || this),
           type: 'raster',
           attribution: '© CARTO © OpenStreetMap contributors',
           min_zoom: 0,
@@ -1418,7 +1420,7 @@ export async function registerMapPlugin(): Promise<void> {
         getTooltip: ({ object }: any) => {
           if (!object) return null;
           const html = formatTooltip(object);
-          return html ? { html, style: { background: 'rgba(0,0,0,0.8)', color: '#fff', fontSize: '12px', padding: '6px 10px', borderRadius: '4px' } } : null;
+          return html ? { html, style: { background: 'var(--warning--background, rgba(0,0,0,0.85))', color: 'var(--warning--color, #fff)', fontSize: '12px', padding: '8px 12px', borderRadius: '4px', maxWidth: '300px', lineHeight: '1.4' } } : null;
         },
         onViewStateChange: ({ viewState }: any) => {
           this._viewState = viewState;
@@ -1435,8 +1437,8 @@ export async function registerMapPlugin(): Promise<void> {
         basemapLayers = buildBasemapLayers(this._tileSources);
       } else {
         basemapLayers = buildBasemapLayers([{
-          name: 'CARTO Voyager',
-          url: DEFAULT_TILE_URL,
+          name: 'CARTO Auto',
+          url: getBasemapUrl(this.parentElement || this),
           type: 'raster',
           attribution: '© CARTO © OpenStreetMap contributors',
           min_zoom: 0,
@@ -1457,19 +1459,113 @@ export async function registerMapPlugin(): Promise<void> {
         controller: true,
         layers: allLayers,
         getTooltip: ({ object, index }: any) => {
-          // Binary data layers don't have object — use index
-          // TODO: build tooltip from Arrow table by index
-          if (!object && index === undefined) return null;
+          const tooltipStyle = {
+            background: 'var(--warning--background, rgba(0,0,0,0.85))',
+            color: 'var(--warning--color, #fff)',
+            fontSize: '12px',
+            padding: '8px 12px',
+            borderRadius: '4px',
+            maxWidth: '300px',
+            lineHeight: '1.4',
+          };
+
+          // GeoArrow binary path — lookup by index
+          if (this._geoData && index != null && index >= 0) {
+            const html = this._formatGeoArrowTooltip(index);
+            return html ? { html, style: tooltipStyle } : null;
+          }
+
+          // WKB fallback path — object is FeatureRow
           if (object) {
             const html = formatTooltip(object);
-            return html ? { html, style: { background: 'rgba(0,0,0,0.8)', color: '#fff', fontSize: '12px', padding: '6px 10px', borderRadius: '4px' } } : null;
+            return html ? { html, style: tooltipStyle } : null;
           }
+
           return null;
         },
         onViewStateChange: ({ viewState }: any) => {
           this._viewState = viewState;
         },
       });
+    }
+
+    /** Inject icon + hide-UI styles into the parent perspective-viewer shadow DOM. */
+    private _injectViewerStyles() {
+      const viewer = this.parentElement;
+      if (!viewer) return;
+      const sr = viewer.shadowRoot;
+      if (!sr) return;
+
+      // Icon style (always)
+      if (!sr.querySelector('#geo-map-styles')) {
+        const s = document.createElement('style');
+        s.id = 'geo-map-styles';
+        s.textContent = `
+          .plugin-select-item[data-plugin="Geo Map"]:before {
+            -webkit-mask-image: var(--plugin-selector-geo-map--content);
+            mask-image: var(--plugin-selector-geo-map--content);
+          }
+        `;
+        sr.appendChild(s);
+      }
+
+      // Hide-UI style (toggled by _updateViewerHideUI)
+      if (!sr.querySelector('#geo-map-hide-ui')) {
+        const s = document.createElement('style');
+        s.id = 'geo-map-hide-ui';
+        sr.appendChild(s);
+
+        // Listen for config changes to toggle
+        viewer.addEventListener('perspective-config-update', () => this._updateViewerHideUI());
+      }
+
+      this._updateViewerHideUI();
+    }
+
+    /** Show/hide Perspective UI sections based on whether Geo Map is active. */
+    private async _updateViewerHideUI() {
+      const viewer = this.parentElement as any;
+      if (!viewer?.shadowRoot) return;
+      const hideEl = viewer.shadowRoot.querySelector('#geo-map-hide-ui');
+      if (!hideEl) return;
+
+      let isGeoMap = false;
+      try {
+        const plugin = await viewer.getPlugin();
+        isGeoMap = plugin?.name === 'Geo Map';
+      } catch {}
+
+      hideEl.textContent = isGeoMap ? `
+        /* Disable Group By / Split By / Order By / Filter — greyed out, not clickable */
+        #top_panel { opacity: 0.25 !important; pointer-events: none !important; }
+      ` : '';
+    }
+
+    /** Format tooltip HTML from GeoArrow propColData by row index. */
+    private _formatGeoArrowTooltip(index: number): string | null {
+      const gd = this._geoData;
+      if (!gd || index < 0 || index >= gd.numRows) return null;
+
+      const schema = gd.table.schema;
+      const propColData = gd.table.propColData;
+      const parts: string[] = [];
+      let title = '';
+
+      for (const [colIdx, values] of propColData) {
+        const name = schema.fields[colIdx].name;
+        const val = values[index];
+        if (val === null || val === undefined) continue;
+
+        if (this._tooltipColName && name === this._tooltipColName) {
+          title = `<div style="font-weight:bold;margin-bottom:4px;font-size:13px">${String(val)}</div>`;
+        } else {
+          parts.push(`<b>${name}</b>: ${val}`);
+        }
+      }
+
+      if (!title && parts.length === 0) return null;
+      const body = parts.length > 0 ? `<div style="font-size:11px">${parts.join('<br/>')}</div>` : '';
+      return title + body;
     }
 
     async update(view: any) { await this.draw(view); }
@@ -1480,7 +1576,21 @@ export async function registerMapPlugin(): Promise<void> {
     }
 
     async resize() { if (this._deck) this._deck.redraw(); }
-    async restyle() {}
+    async restyle() {
+      // Theme changed — update basemap to match light/dark
+      if (this._deck && this._tileSources.length === 0) {
+        const url = getBasemapUrl(this.parentElement || this);
+        const basemapLayers = buildBasemapLayers([{
+          name: 'CARTO Auto', url, type: 'raster',
+          attribution: '© CARTO © OpenStreetMap contributors',
+          min_zoom: 0, max_zoom: 19,
+        }]);
+        // Re-set layers with new basemap
+        const currentLayers = this._deck.props?.layers || [];
+        const dataLayers = currentLayers.filter((l: any) => l.id && !l.id.startsWith('hugr-basemap'));
+        this._deck.setProps({ layers: [...basemapLayers, ...dataLayers] });
+      }
+    }
     save() { return { viewState: this._viewState }; }
     async restore(config: any) {
       if (config?.viewState) this._viewState = config.viewState;
