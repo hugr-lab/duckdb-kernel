@@ -1006,3 +1006,14 @@
   background: var(--jp-error-color1, #d32f2f);
   color: #fff;
 }
+
+.hugr-result-expired {
+  padding: 16px 20px;
+  color: var(--jp-warn-color1, #f57c00);
+  font-size: 13px;
+  text-align: center;
+  background: var(--jp-layout-color1, #fff);
+  border: 1px dashed var(--jp-warn-color1, #f57c00);
+  border-radius: 4px;
+  margin: 8px;
+}

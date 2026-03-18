@@ -288,6 +288,7 @@ interface ArrowPartState {
 
 export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
   private _mimeType: string;
+  private _prevQueryIds: string[] = [];
   private _arrowParts: ArrowPartState[] = [];
   private _lazyRender: ((idx: number) => Promise<void>) | null = null;
   private _resizeObserver: ResizeObserver | null = null;
@@ -309,6 +310,25 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
     if (metadata.base_url) {
       _lastKnownBaseUrl = metadata.base_url;
     }
+
+    // Delete previous spool file when cell is re-run (old result no longer needed)
+    if (this._prevQueryIds.length > 0 && metadata.base_url) {
+      for (const oldId of this._prevQueryIds) {
+        fetch(`${metadata.base_url}/spool/delete?query_id=${oldId}`, { method: 'DELETE' }).catch(() => {});
+      }
+      this._prevQueryIds = [];
+    }
+    // Track current query IDs for cleanup on next re-run
+    const newIds: string[] = [];
+    if (metadata.query_id) newIds.push(metadata.query_id);
+    if (metadata.parts) {
+      for (const p of metadata.parts) {
+        if (p.arrow_url) {
+          try { const u = new URL(p.arrow_url); const q = u.searchParams.get('q'); if (q) newIds.push(q); } catch {}
+        }
+      }
+    }
+    if (newIds.length > 0) this._prevQueryIds = newIds;
 
     // Multipart response with parts array
     if (metadata.parts && metadata.parts.length > 0) {
@@ -665,10 +685,16 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       }
     } catch (err: any) {
       loading.remove();
-      const errorDiv = document.createElement('div');
-      errorDiv.className = 'hugr-result-error';
-      errorDiv.textContent = `Failed to load Arrow data: ${err?.message || 'Unknown error'}`;
-      container.appendChild(errorDiv);
+      const message = err?.message || 'Unknown error';
+      const div = document.createElement('div');
+      if (message.includes('Result unavailable') || message.includes('Failed to connect') || message.includes('Failed to fetch')) {
+        div.className = 'hugr-result-expired';
+        div.textContent = 'Result expired. Re-run the cell to refresh.';
+      } else {
+        div.className = 'hugr-result-error';
+        div.textContent = `Failed to load Arrow data: ${message}`;
+      }
+      container.appendChild(div);
     }
   }
 
@@ -970,7 +996,11 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       }
     } catch (err: any) {
       const message = err?.message || 'Unknown error';
-      this._showError(`Failed to initialize viewer: ${message}`);
+      if (message.includes('Result unavailable') || message.includes('Failed to connect') || message.includes('Failed to fetch')) {
+        this._showExpired();
+      } else {
+        this._showError(`Failed to initialize viewer: ${message}`);
+      }
     }
   }
 
@@ -1003,6 +1033,12 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
   }
 
   dispose(): void {
+    // Delete spool files when cell/widget is removed
+    if (this._prevQueryIds.length > 0 && _lastKnownBaseUrl) {
+      for (const id of this._prevQueryIds) {
+        fetch(`${_lastKnownBaseUrl}/spool/delete?query_id=${id}`, { method: 'DELETE' }).catch(() => {});
+      }
+    }
     void this._cleanup();
     super.dispose();
   }
@@ -1011,6 +1047,13 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
     const div = document.createElement('div');
     div.className = 'hugr-result-error';
     div.textContent = message;
+    this.node.replaceChildren(div);
+  }
+
+  private _showExpired(): void {
+    const div = document.createElement('div');
+    div.className = 'hugr-result-expired';
+    div.textContent = 'Result expired. Re-run the cell to refresh.';
     this.node.replaceChildren(div);
   }
 }
