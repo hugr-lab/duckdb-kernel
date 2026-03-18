@@ -208,6 +208,8 @@ func formatValue(col arrow.Array, idx int, field arrow.Field) string {
 		return fmt.Sprintf("%v", c.Value(idx).ToTime(c.DataType().(*arrow.TimestampType).Unit))
 	case *array.Binary:
 		return fmt.Sprintf("%x", c.Value(idx))
+	case *array.LargeBinary:
+		return fmt.Sprintf("%x", c.Value(idx))
 	default:
 		return fmt.Sprintf("%v", c.ValueStr(idx))
 	}

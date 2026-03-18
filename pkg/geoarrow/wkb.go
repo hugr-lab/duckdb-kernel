@@ -112,30 +112,48 @@ func (r *wkbReader) readHeader() (geomType int, ok bool) {
 	return baseType, true
 }
 
-func (r *wkbReader) readUint32() uint32 {
+func (r *wkbReader) readUint32() (uint32, bool) {
+	if r.remaining() < 4 {
+		return 0, false
+	}
 	v := r.order.Uint32(r.buf[r.pos:])
 	r.pos += 4
-	return v
+	return v, true
 }
 
-func (r *wkbReader) readFloat64() float64 {
+func (r *wkbReader) readFloat64() (float64, bool) {
+	if r.remaining() < 8 {
+		return 0, false
+	}
 	v := math.Float64frombits(r.order.Uint64(r.buf[r.pos:]))
 	r.pos += 8
-	return v
+	return v, true
 }
 
 // skipCoords advances past n coordinates without reading them.
-func (r *wkbReader) skipCoords(n int) {
-	r.pos += n * r.dims * 8
+// Returns false if buffer is too short.
+func (r *wkbReader) skipCoords(n int) bool {
+	need := n * r.dims * 8
+	if r.remaining() < need {
+		return false
+	}
+	r.pos += need
+	return true
 }
 
 // readCoordsXY reads n coordinates, copying only X,Y into dst.
-// Returns the number of float64 values written (n*2).
+// Returns the number of float64 values written (n*2), or -1 on error.
 func (r *wkbReader) readCoordsXY(dst []float64, n int) int {
+	// Pre-check: need n * dims * 8 bytes
+	if r.remaining() < n*r.dims*8 || len(dst) < n*2 {
+		return -1
+	}
 	w := 0
 	for i := 0; i < n; i++ {
-		dst[w] = r.readFloat64()   // X
-		dst[w+1] = r.readFloat64() // Y
+		dst[w] = math.Float64frombits(r.order.Uint64(r.buf[r.pos:]))
+		r.pos += 8
+		dst[w+1] = math.Float64frombits(r.order.Uint64(r.buf[r.pos:]))
+		r.pos += 8
 		w += 2
 		// Skip Z and/or M
 		for d := 2; d < r.dims; d++ {
@@ -164,41 +182,47 @@ func (r *wkbReader) countGeometry() (geomCounts, int, bool) {
 	switch gt {
 	case wkbPoint:
 		c.coords = 1
-		r.skipCoords(1)
+		if !r.skipCoords(1) {
+			return c, 0, false
+		}
 		return c, gt, true
 
 	case wkbLineString:
-		if r.remaining() < 4 {
+		n, ok := r.readUint32()
+		if !ok {
 			return c, 0, false
 		}
-		n := int(r.readUint32())
-		c.coords = n
-		r.skipCoords(n)
+		c.coords = int(n)
+		if !r.skipCoords(int(n)) {
+			return c, 0, false
+		}
 		return c, gt, true
 
 	case wkbPolygon:
-		if r.remaining() < 4 {
+		nRings, ok := r.readUint32()
+		if !ok {
 			return c, 0, false
 		}
-		nRings := int(r.readUint32())
-		c.rings = nRings
-		for i := 0; i < nRings; i++ {
-			if r.remaining() < 4 {
+		c.rings = int(nRings)
+		for i := 0; i < int(nRings); i++ {
+			n, ok := r.readUint32()
+			if !ok {
 				return c, 0, false
 			}
-			n := int(r.readUint32())
-			c.coords += n
-			r.skipCoords(n)
+			c.coords += int(n)
+			if !r.skipCoords(int(n)) {
+				return c, 0, false
+			}
 		}
 		return c, gt, true
 
 	case wkbMultiPoint:
-		if r.remaining() < 4 {
+		nParts, ok := r.readUint32()
+		if !ok {
 			return c, 0, false
 		}
-		nParts := int(r.readUint32())
-		c.parts = nParts
-		for i := 0; i < nParts; i++ {
+		c.parts = int(nParts)
+		for i := 0; i < int(nParts); i++ {
 			sub, _, ok := r.countGeometry()
 			if !ok {
 				return c, 0, false
@@ -208,12 +232,12 @@ func (r *wkbReader) countGeometry() (geomCounts, int, bool) {
 		return c, gt, true
 
 	case wkbMultiLineString:
-		if r.remaining() < 4 {
+		nParts, ok := r.readUint32()
+		if !ok {
 			return c, 0, false
 		}
-		nParts := int(r.readUint32())
-		c.parts = nParts
-		for i := 0; i < nParts; i++ {
+		c.parts = int(nParts)
+		for i := 0; i < int(nParts); i++ {
 			sub, _, ok := r.countGeometry()
 			if !ok {
 				return c, 0, false
@@ -223,12 +247,12 @@ func (r *wkbReader) countGeometry() (geomCounts, int, bool) {
 		return c, gt, true
 
 	case wkbMultiPolygon:
-		if r.remaining() < 4 {
+		nParts, ok := r.readUint32()
+		if !ok {
 			return c, 0, false
 		}
-		nParts := int(r.readUint32())
-		c.parts = nParts
-		for i := 0; i < nParts; i++ {
+		c.parts = int(nParts)
+		for i := 0; i < int(nParts); i++ {
 			sub, _, ok := r.countGeometry()
 			if !ok {
 				return c, 0, false
@@ -239,42 +263,36 @@ func (r *wkbReader) countGeometry() (geomCounts, int, bool) {
 		return c, gt, true
 
 	case wkbGeometryCollection:
-		// GeometryCollection: if all sub-geometries are the same base type,
-		// treat as the corresponding Multi* type.
-		// If mixed types → return type 0 (unsupported).
-		if r.remaining() < 4 {
+		nGeoms, ok := r.readUint32()
+		if !ok {
 			return c, 0, false
 		}
-		nGeoms := int(r.readUint32())
 		if nGeoms == 0 {
 			return c, 0, true
 		}
 		resolvedType := 0
-		for i := 0; i < nGeoms; i++ {
+		for i := 0; i < int(nGeoms); i++ {
 			sub, subType, ok := r.countGeometry()
 			if !ok {
 				return c, 0, false
 			}
 			baseSubType := subType
 			if baseSubType >= wkbMultiPoint {
-				baseSubType -= 3 // Multi* → base type
+				baseSubType -= 3
 			}
 			if resolvedType == 0 {
 				resolvedType = baseSubType
 			} else if resolvedType != baseSubType {
-				// Mixed types in collection — cannot convert
 				return c, 0, false
 			}
 			c.coords += sub.coords
 			c.rings += sub.rings
 			c.parts += sub.parts
-			// Each sub-geometry in collection counts as a part
 			if sub.parts == 0 {
 				c.parts++
 			}
 		}
-		// Return as the corresponding Multi* type
-		multiType := resolvedType + 3 // Point→MultiPoint, Line→MultiLine, Poly→MultiPoly
+		multiType := resolvedType + 3
 		return c, multiType, true
 	}
 
@@ -294,37 +312,42 @@ type fillState struct {
 }
 
 func (r *wkbReader) fillPoint(s *fillState) bool {
-	if r.remaining() < r.dims*8 {
+	w := r.readCoordsXY(s.coords[s.coordPos:], 1)
+	if w < 0 {
 		return false
 	}
-	r.readCoordsXY(s.coords[s.coordPos:], 1)
 	s.coordPos += 2
 	return true
 }
 
 func (r *wkbReader) fillLineString(s *fillState) bool {
-	if r.remaining() < 4 {
+	n, ok := r.readUint32()
+	if !ok {
 		return false
 	}
-	n := int(r.readUint32())
-	r.readCoordsXY(s.coords[s.coordPos:], n)
-	s.coordPos += n * 2
+	w := r.readCoordsXY(s.coords[s.coordPos:], int(n))
+	if w < 0 {
+		return false
+	}
+	s.coordPos += int(n) * 2
 	return true
 }
 
 func (r *wkbReader) fillPolygon(s *fillState) bool {
-	if r.remaining() < 4 {
+	nRings, ok := r.readUint32()
+	if !ok {
 		return false
 	}
-	nRings := int(r.readUint32())
-	for i := 0; i < nRings; i++ {
-		if r.remaining() < 4 {
+	for i := 0; i < int(nRings); i++ {
+		n, ok := r.readUint32()
+		if !ok {
 			return false
 		}
-		n := int(r.readUint32())
-		r.readCoordsXY(s.coords[s.coordPos:], n)
-		s.coordPos += n * 2
-		// Append ring end offset (ringOff[0]=0 is pre-set)
+		w := r.readCoordsXY(s.coords[s.coordPos:], int(n))
+		if w < 0 {
+			return false
+		}
+		s.coordPos += int(n) * 2
 		s.ringPos++
 		s.ringOff[s.ringPos] = int32(s.coordPos / 2)
 	}
@@ -375,10 +398,11 @@ func (r *wkbReader) fillGeometry(s *fillState, geoType GeoType) bool {
 		}
 
 	case wkbMultiPoint:
-		if r.remaining() < 4 {
+		np, ok := r.readUint32()
+		if !ok {
 			return false
 		}
-		nParts := int(r.readUint32())
+		nParts := int(np)
 		for i := 0; i < nParts; i++ {
 			subGt, ok := r.readHeader()
 			if !ok || subGt != wkbPoint {
@@ -391,10 +415,11 @@ func (r *wkbReader) fillGeometry(s *fillState, geoType GeoType) bool {
 		s.appendPartCoord()
 
 	case wkbMultiLineString:
-		if r.remaining() < 4 {
+		np, ok := r.readUint32()
+		if !ok {
 			return false
 		}
-		nParts := int(r.readUint32())
+		nParts := int(np)
 		for i := 0; i < nParts; i++ {
 			subGt, ok := r.readHeader()
 			if !ok || subGt != wkbLineString {
@@ -407,10 +432,11 @@ func (r *wkbReader) fillGeometry(s *fillState, geoType GeoType) bool {
 		}
 
 	case wkbMultiPolygon:
-		if r.remaining() < 4 {
+		np, ok := r.readUint32()
+		if !ok {
 			return false
 		}
-		nParts := int(r.readUint32())
+		nParts := int(np)
 		for i := 0; i < nParts; i++ {
 			subGt, ok := r.readHeader()
 			if !ok || subGt != wkbPolygon {
@@ -423,10 +449,11 @@ func (r *wkbReader) fillGeometry(s *fillState, geoType GeoType) bool {
 		}
 
 	case wkbGeometryCollection:
-		if r.remaining() < 4 {
+		ng, ok := r.readUint32()
+		if !ok {
 			return false
 		}
-		nGeoms := int(r.readUint32())
+		nGeoms := int(ng)
 		for i := 0; i < nGeoms; i++ {
 			subGt, ok := r.readHeader()
 			if !ok {

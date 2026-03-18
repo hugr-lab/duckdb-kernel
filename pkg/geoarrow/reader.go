@@ -1,6 +1,7 @@
 package geoarrow
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 
@@ -21,6 +22,7 @@ import (
 //
 // Conversion is pipelined: up to bufferSize batches are converted ahead
 // in parallel goroutines while the consumer reads previous results.
+// All goroutines respect the provided context for cancellation.
 type Converter struct {
 	refs    atomic.Int64
 	source  array.RecordReader
@@ -32,9 +34,11 @@ type Converter struct {
 	results chan batchResult
 	current arrow.RecordBatch
 	err     error
+	cancel  context.CancelFunc
 
-	// Per-column detected geometry types (shared across goroutines)
-	geoTypes   map[int]GeoType // key = column index
+	// Per-column detected geometry types (shared across goroutines).
+	// Protected by geoTypesMu. Once set to a non-Unknown value, never changes.
+	geoTypes   map[int]GeoType
 	geoTypesMu sync.Mutex
 }
 
@@ -50,6 +54,7 @@ type converterConfig struct {
 	bufferSize int
 	mem        memory.Allocator
 	geoCols    []GeometryColumn // override auto-detection
+	ctx        context.Context
 }
 
 // WithBufferSize sets the number of batches to buffer ahead.
@@ -77,6 +82,13 @@ func WithColumns(cols []GeometryColumn) Option {
 	}
 }
 
+// WithContext sets the context for cancellation of the background pipeline.
+func WithContext(ctx context.Context) Option {
+	return func(c *converterConfig) {
+		c.ctx = ctx
+	}
+}
+
 // NewConverter creates a new WKB→GeoArrow converting RecordReader.
 //
 // It reads batches from source, detects WKB geometry columns (by
@@ -95,6 +107,7 @@ func NewConverter(source array.RecordReader, opts ...Option) *Converter {
 	cfg := converterConfig{
 		bufferSize: 1,
 		mem:        memory.DefaultAllocator,
+		ctx:        context.Background(),
 	}
 	for _, o := range opts {
 		o(&cfg)
@@ -105,98 +118,150 @@ func NewConverter(source array.RecordReader, opts ...Option) *Converter {
 		geoCols = DetectGeometryColumns(source.Schema())
 	}
 
+	ctx, cancel := context.WithCancel(cfg.ctx)
+
 	c := &Converter{
 		source:   source,
-		schema:   source.Schema(), // updated after first converted batch
+		schema:   source.Schema(),
 		geoCols:  geoCols,
 		mem:      cfg.mem,
 		results:  make(chan batchResult, cfg.bufferSize),
 		geoTypes: make(map[int]GeoType, len(geoCols)),
+		cancel:   cancel,
 	}
 	c.refs.Store(1)
 
 	if len(geoCols) == 0 {
-		// No geometry columns — pass through directly
-		go c.passthrough()
+		go c.passthrough(ctx)
 	} else {
-		go c.pipeline(cfg.bufferSize)
+		go c.pipeline(ctx, cfg.bufferSize)
 	}
 
 	return c
 }
 
 // passthrough reads source batches without conversion.
-func (c *Converter) passthrough() {
+func (c *Converter) passthrough(ctx context.Context) {
 	defer close(c.results)
 	for c.source.Next() {
 		rec := c.source.RecordBatch()
 		rec.Retain()
-		c.results <- batchResult{rec: rec}
+		select {
+		case c.results <- batchResult{rec: rec}:
+		case <-ctx.Done():
+			rec.Release()
+			return
+		}
 	}
 	if err := c.source.Err(); err != nil {
-		c.results <- batchResult{err: err}
+		select {
+		case c.results <- batchResult{err: err}:
+		case <-ctx.Done():
+		}
 	}
 }
 
 // pipeline reads source batches and converts them using worker goroutines.
 // Batches are submitted in order; results are collected in order.
-func (c *Converter) pipeline(workers int) {
+func (c *Converter) pipeline(ctx context.Context, workers int) {
 	defer close(c.results)
 
-	// Use a semaphore to limit concurrent conversions
 	sem := make(chan struct{}, workers)
 
-	// Ordered pipeline: read sequentially, convert concurrently, output in order.
 	type job struct {
 		ch chan batchResult
 	}
 	jobs := make(chan job, workers)
 
-	// Collector: reads results in order
+	// Collector: reads results in order and sends to c.results
 	var collectWg sync.WaitGroup
 	collectWg.Add(1)
 	go func() {
 		defer collectWg.Done()
 		for j := range jobs {
-			result := <-j.ch
-			c.results <- result
+			select {
+			case result := <-j.ch:
+				select {
+				case c.results <- result:
+				case <-ctx.Done():
+					if result.rec != nil {
+						result.rec.Release()
+					}
+					// Drain remaining jobs
+					for j2 := range jobs {
+						r := <-j2.ch
+						if r.rec != nil {
+							r.rec.Release()
+						}
+					}
+					return
+				}
+			case <-ctx.Done():
+				for j2 := range jobs {
+					r := <-j2.ch
+					if r.rec != nil {
+						r.rec.Release()
+					}
+				}
+				return
+			}
 		}
 	}()
 
 	// Producer: reads from source, dispatches conversion
 	for c.source.Next() {
+		select {
+		case <-ctx.Done():
+			goto done
+		default:
+		}
+
 		rec := c.source.RecordBatch()
 		rec.Retain()
 
 		ch := make(chan batchResult, 1)
-		jobs <- job{ch: ch}
+		select {
+		case jobs <- job{ch: ch}:
+		case <-ctx.Done():
+			rec.Release()
+			goto done
+		}
 
-		sem <- struct{}{}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			rec.Release()
+			goto done
+		}
+
 		go func(rec arrow.RecordBatch, ch chan batchResult) {
 			defer func() { <-sem }()
-
 			converted, err := c.convertOne(rec)
 			rec.Release()
-
 			if err != nil {
 				ch <- batchResult{err: err}
 				return
 			}
-
 			ch <- batchResult{rec: converted}
 		}(rec, ch)
 	}
 
+done:
 	close(jobs)
 	collectWg.Wait()
 
 	if err := c.source.Err(); err != nil {
-		c.results <- batchResult{err: err}
+		select {
+		case c.results <- batchResult{err: err}:
+		case <-ctx.Done():
+		}
 	}
 }
 
 // convertOne converts all geometry columns in a single batch.
 // Each geometry column is converted independently with its own GeoType.
+// The first batch to detect a type for a column wins — subsequent batches
+// use the already-detected type, ensuring schema consistency.
 func (c *Converter) convertOne(rec arrow.RecordBatch) (arrow.RecordBatch, error) {
 	result := rec
 	result.Retain()
@@ -206,7 +271,8 @@ func (c *Converter) convertOne(rec arrow.RecordBatch) (arrow.RecordBatch, error)
 			continue
 		}
 
-		// Get per-column geoType
+		// Get or detect per-column geoType atomically.
+		// Once set, geoType never changes for a column.
 		c.geoTypesMu.Lock()
 		gt := c.geoTypes[col.Index]
 		c.geoTypesMu.Unlock()
@@ -222,8 +288,8 @@ func (c *Converter) convertOne(rec arrow.RecordBatch) (arrow.RecordBatch, error)
 			result = converted
 		}
 
-		// Update per-column geoType
-		if newGt != GeoTypeUnknown && newGt != gt {
+		// Set geoType for this column (first writer wins, never overwritten).
+		if newGt != GeoTypeUnknown {
 			c.geoTypesMu.Lock()
 			if c.geoTypes[col.Index] == GeoTypeUnknown {
 				c.geoTypes[col.Index] = newGt
@@ -243,11 +309,14 @@ func (c *Converter) Retain() {
 
 func (c *Converter) Release() {
 	if c.refs.Add(-1) == 0 {
+		// Cancel the pipeline — unblocks all goroutines
+		c.cancel()
+
 		if c.current != nil {
 			c.current.Release()
 			c.current = nil
 		}
-		// Drain remaining results
+		// Drain remaining results (pipeline closes c.results after cancel)
 		for r := range c.results {
 			if r.rec != nil {
 				r.rec.Release()
