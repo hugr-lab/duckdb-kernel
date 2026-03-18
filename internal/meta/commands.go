@@ -216,13 +216,9 @@ func (r *Registry) executeAndRender(ctx context.Context, query string) (string, 
 	defer reader.Release()
 
 	result := &engine.QueryResult{}
-	schemaSet := false
+	result.InitFromSchema(reader.Schema())
 	for reader.Next() {
 		rec := reader.RecordBatch()
-		if !schemaSet {
-			result.InitFromSchema(rec.Schema())
-			schemaSet = true
-		}
 		result.AddPreviewRows(rec, 1000)
 	}
 	if err := reader.Err(); err != nil {
