@@ -23,18 +23,24 @@ It consists of three components:
     │   (widget.ts)       │            │   (renderer.ts)      │
     │                     │            │                      │
     │   Perspective       │            │   Perspective        │
-    │   Viewer            │            │   Viewer             │
+    │   (bundled in       │            │   (loaded from       │
+    │    labextension)    │            │    kernel /static/)  │
     │   + Geo Map plugin  │            │   + Geo Map plugin   │
-    └──────────┬──────────┘            └──────────┬───────────┘
-               │ HTTP                              │ HTTP
-    ┌──────────▼──────────────────────────────────▼───────────┐
+    └──────────┬──────────┘            └──────┬───────┬───────┘
+               │ HTTP (Arrow data)            │       │
+               │                    HTTP (data)│       │ HTTP (JS/WASM)
+    ┌──────────▼──────────────────────────────▼───────▼───────┐
     │                  DuckDB Kernel (Go)                      │
     │                                                          │
-    │  ┌─────────┐  ┌──────────────┐  ┌────────────────────┐  │
-    │  │ Jupyter  │  │ Arrow HTTP   │  │ Spool (Arrow IPC)  │  │
-    │  │ Protocol │  │ Server       │  │ temp files on disk  │  │
-    │  │ (ZMQ)    │  │ /arrow/stream│  │                    │  │
-    │  └────┬─────┘  └──────┬───────┘  └────────┬───────────┘  │
+    │  ┌─────────┐  ┌──────────────┐  ┌──────────┐ ┌─────────┐  │
+    │  │ Jupyter  │  │ Arrow HTTP   │  │ Spool    │ │ Static  │  │
+    │  │ Protocol │  │ Server       │  │ (Arrow   │ │ Files   │  │
+    │  │ (ZMQ)    │  │ /arrow/stream│  │  IPC)    │ │ /static/│  │
+    │  └────┬─────┘  └──────┬───────┘  └────┬─────┘ └────┬────┘  │
+    │       │               │               │            │        │
+    │       │               │               │    Perspective      │
+    │       │               │               │    JS/WASM/CSS      │
+    │       │               │               │    (for VS Code)    │
     │       │               │                    │              │
     │  ┌────▼───────────────▼────────────────────▼───────────┐  │
     │  │              DuckDB Engine                           │  │
