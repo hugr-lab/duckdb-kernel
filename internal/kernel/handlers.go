@@ -184,7 +184,7 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 		} else {
 			os.Remove(k.spool.Path(queryID))
 		}
-		if err := k.spool.Cleanup(); err != nil {
+		if _, err := k.spool.Cleanup(); err != nil {
 			log.Printf("spool cleanup error: %v", err)
 		}
 	}

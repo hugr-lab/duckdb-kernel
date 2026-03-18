@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -67,8 +68,13 @@ func main() {
 	sess := session.NewSession(sessionID, connector)
 	defer sess.Close()
 
-	// Create result spool
-	sp, err := spool.NewSpool(sessionID)
+	// Create result spool (flat dir, TTL-based cleanup)
+	spoolCfg := spool.Config{
+		Dir:     os.Getenv("DUCKDB_KERNEL_SPOOL_DIR"),
+		TTL:     parseDuration(os.Getenv("DUCKDB_KERNEL_SPOOL_TTL"), spool.DefaultTTL),
+		MaxSize: parseSize(os.Getenv("DUCKDB_KERNEL_SPOOL_MAX_SIZE"), spool.DefaultMaxSize),
+	}
+	sp, err := spool.NewSpool(spoolCfg)
 	if err != nil {
 		log.Printf("Warning: failed to create spool: %v (Arrow file output disabled)", err)
 	}
@@ -139,4 +145,44 @@ func parseConnectionFile(path string) (*kernel.ConnectionInfo, error) {
 	}
 
 	return &info, nil
+}
+
+// parseDuration parses a duration string, returning def on empty/error.
+func parseDuration(s string, def time.Duration) time.Duration {
+	if s == "" {
+		return def
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		log.Printf("invalid duration %q, using default %v", s, def)
+		return def
+	}
+	return d
+}
+
+// parseSize parses a size string (e.g. "2g", "500m", "1073741824"), returning def on empty/error.
+func parseSize(s string, def int64) int64 {
+	if s == "" {
+		return def
+	}
+	s = strings.TrimSpace(strings.ToLower(s))
+	multiplier := int64(1)
+	if strings.HasSuffix(s, "g") || strings.HasSuffix(s, "gb") {
+		multiplier = 1024 * 1024 * 1024
+		s = strings.TrimRight(s, "gb")
+	} else if strings.HasSuffix(s, "m") || strings.HasSuffix(s, "mb") {
+		multiplier = 1024 * 1024
+		s = strings.TrimRight(s, "mb")
+	} else if strings.HasSuffix(s, "k") || strings.HasSuffix(s, "kb") {
+		multiplier = 1024
+		s = strings.TrimRight(s, "kb")
+	}
+	n, err := fmt.Sscanf(s, "%d", new(int64))
+	if err != nil || n == 0 {
+		log.Printf("invalid size %q, using default %d", s, def)
+		return def
+	}
+	var val int64
+	fmt.Sscanf(s, "%d", &val)
+	return val * multiplier
 }

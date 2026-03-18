@@ -250,6 +250,22 @@ When notebook opened without running kernel:
 | 4.2 | Verify reader auto-detects compression | `internal/spool/spool.go` | Arrow IPC reader handles LZ4 transparently |
 | 4.3 | Compression config (on/off) | Config | Default: on |
 
+### Phase 5: VS Code port discovery after kernel restart
+
+VS Code problem: renderer stores Arrow HTTP base URL (including port) from
+first query. After kernel restart → new port → old URL broken →
+"Failed to fetch dynamically imported module" for perspective static files.
+
+**Solution:** Renderer should query kernel for current base URL via Jupyter
+messaging protocol (not hardcoded port). On each render, if stored URL fails,
+request new base URL from kernel via `comm_info` or custom message.
+
+| # | Task | Files | Notes |
+| --- | --- | --- | --- |
+| 5.1 | Kernel: expose base URL via kernel_info_reply metadata | `internal/kernel/handlers.go` | Add `arrow_base_url` to kernel_info |
+| 5.2 | Renderer: fetch base URL from kernel on init/reconnect | `extensions/vscode/src/renderer.ts` | Use messaging to get current port |
+| 5.3 | Renderer: retry with new URL on connection error | `extensions/vscode/src/renderer.ts` | Auto-recovery on port change |
+
 ### Dependencies
 
 ```
