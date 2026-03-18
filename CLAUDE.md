@@ -7,6 +7,7 @@ Auto-generated from all feature plans. Last updated: 2026-03-12
 - Arrow IPC files on local filesystem (existing spool mechanism) (002-perspective-viewer)
 - Go 1.26 (kernel), TypeScript 5.x (extensions) + go-duckdb v2 (kernel), VS Code API (vscode ext), @jupyterlab/application + @jupyterlab/notebook (jupyterlab ext) (003-database-explorer-panel)
 - Arrow IPC files on local filesystem (spool), DuckDB in-memory/attached databases (003-database-explorer-panel)
+- Go 1.22+ (kernel), TypeScript 5.x (extensions) + `github.com/paulmach/orb` (Go WKB/WKT), `@deck.gl/core` + `@deck.gl/layers` + `@deck.gl/geo-layers` (map rendering), `wellknown` (WKT→GeoJSON parser) (005-geometry-perspective-support)
 
 - Go 1.22+ (001-duckdb-kernel-mvp)
 
@@ -26,10 +27,10 @@ tests/
 Go 1.22+: Follow standard conventions
 
 ## Recent Changes
+- 005-geometry-perspective-support: Added Go 1.22+ (kernel), TypeScript 5.x (extensions) + `github.com/paulmach/orb` (Go WKB/WKT), `@deck.gl/core` + `@deck.gl/layers` + `@deck.gl/geo-layers` (map rendering), `wellknown` (WKT→GeoJSON parser)
 - 003-database-explorer-panel: Added Go 1.26 (kernel), TypeScript 5.x (extensions) + go-duckdb v2 (kernel), VS Code API (vscode ext), @jupyterlab/application + @jupyterlab/notebook (jupyterlab ext)
 - 002-perspective-viewer: Added Go 1.26 (kernel), TypeScript 5.x (frontend extensions), Python 3.12 (server extension packaging)
 
-- 001-duckdb-kernel-mvp: Added Go 1.22+
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->

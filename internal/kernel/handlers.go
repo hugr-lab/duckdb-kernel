@@ -216,7 +216,7 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 				}
 			}
 
-			data["application/vnd.hugr.result+json"] = map[string]any{
+			resultMeta := map[string]any{
 				"query_id":         result.QueryID,
 				"arrow_url":        k.arrowServer.ArrowURL(result.QueryID, result.TotalRows),
 				"base_url":         k.arrowServer.BaseURL(),
@@ -226,6 +226,44 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 				"query_time_ms":    queryTimeMs,
 				"transfer_time_ms": transferTimeMs,
 			}
+
+			// Add geometry column metadata if any geometry columns detected
+			if len(result.GeometryColumns) > 0 {
+				geoCols := make([]map[string]any, len(result.GeometryColumns))
+				for i, gc := range result.GeometryColumns {
+					geoCols[i] = map[string]any{
+						"name":   gc.Name,
+						"srid":   gc.SRID,
+						"format": gc.Format,
+					}
+				}
+				resultMeta["geometry_columns"] = geoCols
+			}
+
+			// Add tile source configuration if available
+			if len(k.tileSources) > 0 {
+				tiles := make([]map[string]any, len(k.tileSources))
+				for i, ts := range k.tileSources {
+					t := map[string]any{
+						"name": ts.Name,
+						"url":  ts.URL,
+						"type": ts.Type,
+					}
+					if ts.Attribution != "" {
+						t["attribution"] = ts.Attribution
+					}
+					if ts.MinZoom > 0 {
+						t["min_zoom"] = ts.MinZoom
+					}
+					if ts.MaxZoom > 0 {
+						t["max_zoom"] = ts.MaxZoom
+					}
+					tiles[i] = t
+				}
+				resultMeta["tile_sources"] = tiles
+			}
+
+			data["application/vnd.hugr.result+json"] = resultMeta
 		}
 
 		displayMsg := NewMessage(msg, "display_data")

@@ -7,6 +7,24 @@
  */
 
 import type { ActivationFunction } from 'vscode-notebook-renderer';
+import { registerMapPlugin } from './map-plugin';
+
+/** Geometry column metadata from Arrow schema detection. */
+interface GeometryColumnMeta {
+  name: string;
+  srid: number;
+  format: string; // "WKB" | "GeoJSON" | "H3Cell"
+}
+
+/** Tile source configuration for map basemaps. */
+interface TileSourceMeta {
+  name: string;
+  url: string;
+  type: string; // "raster" | "vector" | "tilejson"
+  attribution?: string;
+  min_zoom?: number;
+  max_zoom?: number;
+}
 
 /** Backward-compatible flat metadata (single Arrow result). */
 interface FlatMetadata {
@@ -14,6 +32,8 @@ interface FlatMetadata {
   arrow_url?: string;
   rows?: number;
   columns?: { name: string; type: string }[];
+  geometry_columns?: GeometryColumnMeta[];
+  tile_sources?: TileSourceMeta[];
   data_size_bytes?: number;
   query_time_ms?: number;
   transfer_time_ms?: number;
@@ -27,6 +47,8 @@ interface PartDef {
   arrow_url?: string;
   rows?: number;
   columns?: { name: string; type: string }[];
+  geometry_columns?: GeometryColumnMeta[];
+  tile_sources?: TileSourceMeta[];
   data_size_bytes?: number;
   data?: any;
   errors?: { message: string; path?: string[]; extensions?: any }[];
@@ -190,6 +212,7 @@ function loadPerspective(baseUrl: string): Promise<any> {
       }
     }
     await customElements.whenDefined('perspective-viewer');
+    await registerMapPlugin();
     return perspective;
   })();
   _perspectiveReady.catch(() => {
@@ -835,7 +858,26 @@ async function renderArrowPart(
     viewer.style.cssText = 'position: absolute; top: 0; left: 0; width: 100%; height: 100%;';
     viewContainer.appendChild(viewer);
 
+    // Pass geometry metadata to the map plugin via data attributes
+    const geoCols = metadata.geometry_columns || part.geometry_columns;
+    const tileSources = metadata.tile_sources || part.tile_sources;
+    if (geoCols && geoCols.length > 0) {
+      viewer.setAttribute('data-geometry-columns', JSON.stringify(geoCols));
+    }
+    if (tileSources && tileSources.length > 0) {
+      viewer.setAttribute('data-tile-sources', JSON.stringify(tileSources));
+    }
+    if (part.arrow_url) {
+      viewer.setAttribute('data-arrow-url', part.arrow_url);
+    }
+
     await (viewer as any).load(table);
+
+    // After load, notify map plugin about geometry metadata
+    const mapPlugin = viewer.querySelector('perspective-viewer-map') as any;
+    if (mapPlugin && mapPlugin.setGeometryMeta) {
+      mapPlugin.setGeometryMeta(geoCols || [], tileSources || [], part.arrow_url || null);
+    }
   } catch (err: any) {
     loading.remove();
     container.appendChild(makeError(`Failed to load Arrow data: ${err?.message || 'Unknown error'}`));
@@ -1386,7 +1428,24 @@ async function renderSingleArrow(
     viewer.style.cssText = 'position: absolute; top: 0; left: 0; width: 100%; height: 100%;';
     container.appendChild(viewer);
 
+    // Pass geometry metadata to the map plugin
+    const geoCols = metadata.geometry_columns;
+    const tileSources = metadata.tile_sources;
+    if (geoCols && geoCols.length > 0) {
+      viewer.setAttribute('data-geometry-columns', JSON.stringify(geoCols));
+    }
+    if (tileSources && tileSources.length > 0) {
+      viewer.setAttribute('data-tile-sources', JSON.stringify(tileSources));
+    }
+    viewer.setAttribute('data-arrow-url', arrowUrl);
+
     await (viewer as any).load(table);
+
+    // After load, notify map plugin about geometry metadata
+    const mapPlugin = viewer.querySelector('perspective-viewer-map') as any;
+    if (mapPlugin && mapPlugin.setGeometryMeta) {
+      mapPlugin.setGeometryMeta(geoCols || [], tileSources || [], arrowUrl);
+    }
   } catch (err: any) {
     if (signal.aborted) return;
     element.replaceChildren(makeError(`Failed to initialize viewer: ${err?.message || 'Unknown error'}`));

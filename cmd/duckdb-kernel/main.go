@@ -21,6 +21,7 @@ import (
 func main() {
 	connectionFile := flag.String("connection-file", "", "Path to Jupyter connection file")
 	logFile := flag.String("log-file", "", "Path to log file (default: stderr)")
+	basemaps := flag.String("basemaps", "", "JSON array of tile source configs, e.g. '[{\"name\":\"OSM\",\"url\":\"https://tile.openstreetmap.org/{z}/{x}/{y}.png\",\"type\":\"raster\"}]'")
 	flag.Parse()
 
 	// --log-file flag takes priority, then DUCKDB_KERNEL_LOG env var
@@ -74,6 +75,21 @@ func main() {
 
 	// Create kernel
 	k := kernel.NewKernel(connInfo, sess, sp)
+
+	// Configure tile sources from --basemaps flag or DUCKDB_KERNEL_BASEMAPS env
+	basemapsJSON := *basemaps
+	if basemapsJSON == "" {
+		basemapsJSON = os.Getenv("DUCKDB_KERNEL_BASEMAPS")
+	}
+	if basemapsJSON != "" {
+		var tiles []kernel.TileSourceConfig
+		if err := json.Unmarshal([]byte(basemapsJSON), &tiles); err != nil {
+			log.Printf("Warning: failed to parse basemaps config: %v", err)
+		} else {
+			k.SetTileSources(tiles)
+			log.Printf("Configured %d basemap tile source(s)", len(tiles))
+		}
+	}
 
 	// Context cancelled on SIGINT, SIGTERM, or SIGHUP (VS Code may send SIGHUP on close).
 	// The same context is passed to ZMQ sockets — cancellation unblocks Recv() calls.

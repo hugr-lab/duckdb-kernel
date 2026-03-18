@@ -4,6 +4,7 @@
 
 import { Widget } from '@lumino/widgets';
 import { Message } from '@lumino/messaging';
+import { registerMapPlugin } from './map-plugin';
 
 const STATIC_BASE = '/lab/extensions/@hugr-lab/perspective-viewer/static/perspective';
 
@@ -29,6 +30,7 @@ function loadPerspective(): Promise<any> {
     }
 
     await customElements.whenDefined('perspective-viewer');
+    await registerMapPlugin();
     return perspective;
   })();
   _perspectiveReady.catch(() => {
@@ -103,18 +105,44 @@ async function streamArrowToTable(
   return table;
 }
 
+/** Geometry column metadata. */
+interface GeometryColumnMeta {
+  name: string;
+  srid: number;
+  format: string;
+}
+
+/** Tile source configuration. */
+interface TileSourceMeta {
+  name: string;
+  url: string;
+  type: string;
+  attribution?: string;
+  min_zoom?: number;
+  max_zoom?: number;
+}
+
 export class PerspectiveTabWidget extends Widget {
   private _arrowUrl: string;
   private _title: string;
+  private _geometryColumns: GeometryColumnMeta[];
+  private _tileSources: TileSourceMeta[];
   private _viewer: HTMLElement | null = null;
   private _table: any = null;
   private _client: any = null;
   private _abortController: AbortController | null = null;
 
-  constructor(arrowUrl: string, title?: string) {
+  constructor(
+    arrowUrl: string,
+    title?: string,
+    geometryColumns?: GeometryColumnMeta[],
+    tileSources?: TileSourceMeta[],
+  ) {
     super();
     this._arrowUrl = arrowUrl;
     this._title = title || 'Result';
+    this._geometryColumns = geometryColumns || [];
+    this._tileSources = tileSources || [];
     this.addClass('hugr-perspective-tab');
     this.node.style.width = '100%';
     this.node.style.height = '100%';
@@ -144,6 +172,16 @@ export class PerspectiveTabWidget extends Widget {
       viewer.setAttribute('plugin', 'Datagrid');
       viewer.style.width = '100%';
       viewer.style.height = '100%';
+
+      // Pass geometry and tile metadata for the map plugin
+      if (this._geometryColumns.length > 0) {
+        viewer.setAttribute('data-geometry-columns', JSON.stringify(this._geometryColumns));
+      }
+      if (this._tileSources.length > 0) {
+        viewer.setAttribute('data-tile-sources', JSON.stringify(this._tileSources));
+      }
+      viewer.setAttribute('data-arrow-url', this._arrowUrl);
+
       this.node.appendChild(viewer);
       this._viewer = viewer;
 

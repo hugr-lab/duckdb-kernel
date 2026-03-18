@@ -1,0 +1,1497 @@
+/**
+ * Perspective Map Plugin — renders geometry data on an interactive Deck.gl map.
+ *
+ * Pipeline:
+ * 1. Fetches raw Arrow IPC from the kernel (bypassing Perspective to preserve WKB binary)
+ * 2. Parses WKB binary → coordinate arrays
+ * 3. Renders via Deck.gl layers (ScatterplotLayer, PathLayer, SolidPolygonLayer)
+ * 4. H3 cells rendered via H3HexagonLayer
+ *
+ * Works offline — all assets bundled, no CDN/internet required.
+ */
+
+import { Deck } from '@deck.gl/core';
+import { ScatterplotLayer, SolidPolygonLayer, PathLayer, BitmapLayer } from '@deck.gl/layers';
+import { H3HexagonLayer, TileLayer } from '@deck.gl/geo-layers';
+
+/** Geometry column metadata passed from the renderer. */
+interface GeometryColumnMeta {
+  name: string;
+  srid: number;
+  format: string; // "WKB" | "GeoJSON" | "H3Cell"
+}
+
+/** Tile source configuration for basemaps. */
+interface TileSourceMeta {
+  name: string;
+  url: string;
+  type: string;
+  attribution?: string;
+  min_zoom?: number;
+  max_zoom?: number;
+}
+
+// WKB geometry type constants
+const WKB_POINT = 1;
+const WKB_LINESTRING = 2;
+const WKB_POLYGON = 3;
+const WKB_MULTIPOINT = 4;
+const WKB_MULTILINESTRING = 5;
+const WKB_MULTIPOLYGON = 6;
+
+interface ParsedGeometry {
+  type: number; // WKB type constant
+  coordinates: number[][]; // For points: [[lon,lat]], for lines: [[lon,lat],...], for polygons: rings
+}
+
+interface BBox {
+  minLon: number;
+  maxLon: number;
+  minLat: number;
+  maxLat: number;
+}
+
+interface MapViewState {
+  longitude: number;
+  latitude: number;
+  zoom: number;
+  pitch: number;
+  bearing: number;
+}
+
+/** Parse a single WKB geometry into coordinates. */
+function parseWKB(buffer: Uint8Array): ParsedGeometry | null {
+  if (!buffer || buffer.length < 5) return null;
+
+  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  const le = buffer[0] === 1; // byte order: 1=little-endian, 0=big-endian
+  let offset = 1;
+
+  const getUint32 = () => {
+    const v = le ? view.getUint32(offset, true) : view.getUint32(offset, false);
+    offset += 4;
+    return v;
+  };
+  const getFloat64 = () => {
+    const v = le ? view.getFloat64(offset, true) : view.getFloat64(offset, false);
+    offset += 8;
+    return v;
+  };
+
+  let geomType = getUint32();
+  // Strip SRID flag and Z/M flags (high bits)
+  const hasZ = (geomType & 0x80000000) !== 0 || (geomType & 0xFFFF) >= 1001;
+  if (geomType > 1000000) geomType = geomType % 1000; // ISO WKB Z/M
+  else if (geomType > 1000) geomType = geomType - 1000;
+  geomType = geomType & 0xFF;
+
+  // If SRID flag is set, skip 4 bytes
+  if ((view.getUint32(1, le) & 0x20000000) !== 0) {
+    offset += 4;
+  }
+
+  const coordDim = hasZ ? 3 : 2;
+
+  const readCoord = (): [number, number] => {
+    const x = getFloat64();
+    const y = getFloat64();
+    if (hasZ) getFloat64(); // skip Z
+    return [x, y];
+  };
+
+  const readRing = (): number[][] => {
+    const n = getUint32();
+    const coords: number[][] = [];
+    for (let i = 0; i < n; i++) coords.push(readCoord());
+    return coords;
+  };
+
+  switch (geomType) {
+    case WKB_POINT:
+      return { type: WKB_POINT, coordinates: [readCoord()] };
+
+    case WKB_LINESTRING:
+      return { type: WKB_LINESTRING, coordinates: readRing() };
+
+    case WKB_POLYGON: {
+      const numRings = getUint32();
+      const rings: number[][] = [];
+      for (let i = 0; i < numRings; i++) {
+        rings.push(...readRing());
+      }
+      return { type: WKB_POLYGON, coordinates: rings.length > 0 ? rings : [] };
+    }
+
+    case WKB_MULTIPOINT: {
+      const n = getUint32();
+      const coords: number[][] = [];
+      for (let i = 0; i < n; i++) {
+        // Each sub-geometry has its own WKB header
+        const sub = parseWKB(buffer.slice(offset));
+        if (sub) coords.push(...sub.coordinates);
+        offset += 5 + coordDim * 8; // header + point
+      }
+      return { type: WKB_POINT, coordinates: coords };
+    }
+
+    case WKB_MULTILINESTRING: {
+      const n = getUint32();
+      // Return as separate linestrings (flatten)
+      const allCoords: number[][] = [];
+      for (let i = 0; i < n; i++) {
+        const sub = parseWKB(buffer.slice(offset));
+        if (sub) allCoords.push(...sub.coordinates);
+        // Can't easily skip without parsing, so this is approximate
+        // In practice, we'll handle this at a higher level
+      }
+      return { type: WKB_LINESTRING, coordinates: allCoords };
+    }
+
+    case WKB_MULTIPOLYGON: {
+      const n = getUint32();
+      const allCoords: number[][] = [];
+      for (let i = 0; i < n; i++) {
+        const sub = parseWKB(buffer.slice(offset));
+        if (sub) allCoords.push(...sub.coordinates);
+      }
+      return { type: WKB_POLYGON, coordinates: allCoords };
+    }
+
+    default:
+      return null;
+  }
+}
+
+/** Row data for deck.gl rendering. */
+interface FeatureRow {
+  position?: [number, number]; // for points
+  path?: number[][]; // for linestrings
+  polygon?: number[][]; // for polygons (ring coordinates)
+  h3Index?: string; // for H3 cells
+  properties: Record<string, any>; // non-geometry column values
+}
+
+/** Fetch length-prefixed Arrow IPC chunks from the kernel.
+ *  Each chunk is a complete IPC message: [4-byte LE length][Arrow IPC bytes].
+ *  Returns individual chunks (not concatenated), since each is a standalone IPC stream. */
+async function fetchArrowChunks(url: string): Promise<Uint8Array[]> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Failed to fetch Arrow data (HTTP ${response.status})`);
+  if (!response.body) throw new Error('Response body is null');
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let buffer = new Uint8Array(0);
+
+  const concatBuf = (a: Uint8Array, b: Uint8Array): Uint8Array => {
+    const result = new Uint8Array(a.length + b.length);
+    result.set(a);
+    result.set(b, a.length);
+    return result;
+  };
+
+  try {
+    while (true) {
+      while (buffer.length < 4) {
+        const { done, value } = await reader.read();
+        if (done) return chunks;
+        buffer = concatBuf(buffer, value);
+      }
+
+      const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+      const chunkLen = view.getUint32(0, true);
+      if (chunkLen === 0) break;
+
+      while (buffer.length < 4 + chunkLen) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer = concatBuf(buffer, value);
+      }
+
+      if (buffer.length < 4 + chunkLen) break;
+
+      chunks.push(buffer.slice(4, 4 + chunkLen));
+      buffer = buffer.slice(4 + chunkLen);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return chunks;
+}
+
+/** Extract features from a single Arrow IPC chunk. */
+function extractFeaturesFromTable(
+  table: any,
+  geomColumnName: string,
+  geomFormat: string,
+  features: FeatureRow[],
+  bbox: BBox,
+): number {
+  let detectedType = 0;
+
+  const geomColIndex = table.schema.fields.findIndex((f: any) => f.name === geomColumnName);
+  if (geomColIndex === -1) return 0;
+
+  const geomColumn = table.getChildAt(geomColIndex);
+  if (!geomColumn) return 0;
+
+  const propFields = table.schema.fields
+    .map((f: any, i: number) => ({ name: f.name, index: i }))
+    .filter((f: any) => f.name !== geomColumnName);
+
+  for (let rowIdx = 0; rowIdx < table.numRows; rowIdx++) {
+    const geomValue = geomColumn.get(rowIdx);
+    if (geomValue === null || geomValue === undefined) continue;
+
+    const properties: Record<string, any> = {};
+    for (const pf of propFields) {
+      const col = table.getChildAt(pf.index);
+      if (col) properties[pf.name] = col.get(rowIdx);
+    }
+
+    if (geomFormat === 'H3Cell') {
+      const h3Index = typeof geomValue === 'string' ? geomValue : String(geomValue);
+      features.push({ h3Index, properties });
+      continue;
+    }
+
+    // GeoJSON text format
+    if (geomFormat === 'GeoJSON' && typeof geomValue === 'string') {
+      try {
+        const gj = JSON.parse(geomValue);
+        const feat: FeatureRow = { properties };
+        if (gj.type === 'Point') {
+          feat.position = gj.coordinates as [number, number];
+          if (detectedType === 0) detectedType = WKB_POINT;
+        } else if (gj.type === 'LineString' || gj.type === 'MultiLineString') {
+          feat.path = gj.type === 'MultiLineString' ? gj.coordinates.flat() : gj.coordinates;
+          if (detectedType === 0) detectedType = WKB_LINESTRING;
+        } else if (gj.type === 'Polygon' || gj.type === 'MultiPolygon') {
+          feat.polygon = gj.type === 'MultiPolygon' ? gj.coordinates.flat(2) : gj.coordinates.flat();
+          if (detectedType === 0) detectedType = WKB_POLYGON;
+        }
+        if (feat.position || feat.path || feat.polygon) {
+          // Update bbox
+          const coords = feat.position ? [feat.position] : (feat.path || feat.polygon || []);
+          for (const c of coords) {
+            if (c[0] < bbox.minLon) bbox.minLon = c[0];
+            if (c[0] > bbox.maxLon) bbox.maxLon = c[0];
+            if (c[1] < bbox.minLat) bbox.minLat = c[1];
+            if (c[1] > bbox.maxLat) bbox.maxLat = c[1];
+          }
+          features.push(feat);
+        }
+      } catch { /* skip invalid GeoJSON */ }
+      continue;
+    }
+
+    let wkbBytes: Uint8Array;
+    if (geomValue instanceof Uint8Array) {
+      wkbBytes = geomValue;
+    } else if (ArrayBuffer.isView(geomValue)) {
+      wkbBytes = new Uint8Array(geomValue.buffer, geomValue.byteOffset, geomValue.byteLength);
+    } else if (typeof geomValue === 'object' && geomValue !== null) {
+      const len = geomValue.length || geomValue.byteLength;
+      if (len > 0) {
+        wkbBytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) wkbBytes[i] = geomValue[i];
+      } else {
+        continue;
+      }
+    } else {
+      continue;
+    }
+
+    const parsed = parseWKB(wkbBytes);
+    if (!parsed) continue;
+
+    if (detectedType === 0) detectedType = parsed.type;
+
+    for (const coord of parsed.coordinates) {
+      if (coord[0] < bbox.minLon) bbox.minLon = coord[0];
+      if (coord[0] > bbox.maxLon) bbox.maxLon = coord[0];
+      if (coord[1] < bbox.minLat) bbox.minLat = coord[1];
+      if (coord[1] > bbox.maxLat) bbox.maxLat = coord[1];
+    }
+
+    const row: FeatureRow = { properties };
+    switch (parsed.type) {
+      case WKB_POINT:
+        row.position = parsed.coordinates[0] as [number, number];
+        break;
+      case WKB_LINESTRING:
+        row.path = parsed.coordinates;
+        break;
+      case WKB_POLYGON:
+        row.polygon = parsed.coordinates;
+        break;
+    }
+    features.push(row);
+  }
+
+  return detectedType;
+}
+
+/** Parse Arrow IPC chunks and extract features. Each chunk is a standalone IPC message. */
+async function parseArrowToFeatures(
+  url: string,
+  geomColumnName: string,
+  geomFormat: string,
+): Promise<{ features: FeatureRow[]; geomType: number; bbox: BBox }> {
+  const arrow = await import('apache-arrow');
+  const chunks = await fetchArrowChunks(url);
+
+  const features: FeatureRow[] = [];
+  const bbox: BBox = { minLon: Infinity, maxLon: -Infinity, minLat: Infinity, maxLat: -Infinity };
+  let detectedType = 0;
+
+  for (const chunk of chunks) {
+    try {
+      const table = arrow.tableFromIPC(chunk);
+      if (table.numRows === 0) continue;
+      const t = extractFeaturesFromTable(table, geomColumnName, geomFormat, features, bbox);
+      if (t !== 0 && detectedType === 0) detectedType = t;
+    } catch {
+      // Skip chunks that fail to parse (e.g. schema-only messages)
+    }
+  }
+
+  return { features, geomType: detectedType, bbox };
+}
+
+// ────────────────────── GeoArrow binary path ──────────────────────
+// When the kernel serves GeoArrow-encoded data (?geoarrow=1),
+// we extract typed arrays directly from Arrow columns and pass them
+// to deck.gl layers via binary data format — zero JS objects, zero-copy to GPU.
+
+/** GeoArrow extension type names for detection. */
+const GA_EXT_NAMES = new Set([
+  'geoarrow.point', 'geoarrow.linestring', 'geoarrow.polygon',
+  'geoarrow.multipoint', 'geoarrow.multilinestring', 'geoarrow.multipolygon',
+]);
+
+/** Result from GeoArrow data loading. */
+interface GeoArrowData {
+  extensionName: string;
+  flatCoords: Float64Array;
+  startIndices: Uint32Array;
+  numRows: number;
+  bbox: BBox;
+  /** Merged table data for property access */
+  table: { schema: any; numRows: number; propColData: Map<number, any[]>; geomColIdx: number };
+  geomColIdx: number;
+}
+
+/** Extract coordinates from a single GeoArrow Data chunk into arrays. */
+function extractCoordsFromData(
+  data0: any,
+  extensionName: string,
+  batchRows: number,
+  allCoords: number[],
+  allStartIndices: number[],
+  rowOffset: number,
+  bbox: BBox,
+): void {
+  // Navigate nested structure to reach flat Float64 coordinates.
+  // coordBase = current position in allCoords (in coord pairs, not float64s)
+  const coordBase = allCoords.length / 2;
+
+  if (extensionName === 'geoarrow.multipoint') {
+    // List<FixedSizeList<Float64>[2]>
+    const offsets = data0.valueOffsets as Int32Array;
+    const values = data0.children[0].children[0].values as Float64Array;
+    for (let i = 0; i < batchRows; i++) {
+      allStartIndices.push(coordBase + offsets[i]);
+    }
+    for (let i = 0; i < values.length; i += 2) {
+      allCoords.push(values[i], values[i + 1]);
+      if (values[i] < bbox.minLon) bbox.minLon = values[i];
+      if (values[i] > bbox.maxLon) bbox.maxLon = values[i];
+      if (values[i + 1] < bbox.minLat) bbox.minLat = values[i + 1];
+      if (values[i + 1] > bbox.maxLat) bbox.maxLat = values[i + 1];
+    }
+  } else if (extensionName === 'geoarrow.multilinestring' || extensionName === 'geoarrow.polygon') {
+    // List<List<FixedSizeList<Float64>[2]>>
+    const outerOffsets = data0.valueOffsets as Int32Array;
+    const innerData = data0.children[0];
+    const innerOffsets = innerData.valueOffsets as Int32Array;
+    const values = innerData.children[0].children[0].values as Float64Array;
+    for (let i = 0; i < batchRows; i++) {
+      const partIdx = outerOffsets[i];
+      const coordIdx = partIdx < innerOffsets.length ? innerOffsets[partIdx] : 0;
+      allStartIndices.push(coordBase + coordIdx);
+    }
+    for (let i = 0; i < values.length; i += 2) {
+      allCoords.push(values[i], values[i + 1]);
+      if (values[i] < bbox.minLon) bbox.minLon = values[i];
+      if (values[i] > bbox.maxLon) bbox.maxLon = values[i];
+      if (values[i + 1] < bbox.minLat) bbox.minLat = values[i + 1];
+      if (values[i + 1] > bbox.maxLat) bbox.maxLat = values[i + 1];
+    }
+  } else if (extensionName === 'geoarrow.multipolygon') {
+    // List<List<List<FixedSizeList<Float64>[2]>>>
+    const geomOffsets = data0.valueOffsets as Int32Array;
+    const polyData = data0.children[0];
+    const polyOffsets = polyData.valueOffsets as Int32Array;
+    const ringData = polyData.children[0];
+    const ringOffsets = ringData.valueOffsets as Int32Array;
+    const values = ringData.children[0].children[0].values as Float64Array;
+    for (let i = 0; i < batchRows; i++) {
+      const polyIdx = geomOffsets[i];
+      const ringIdx = polyIdx < polyOffsets.length ? polyOffsets[polyIdx] : 0;
+      const coordIdx = ringIdx < ringOffsets.length ? ringOffsets[ringIdx] : 0;
+      allStartIndices.push(coordBase + coordIdx);
+    }
+    for (let i = 0; i < values.length; i += 2) {
+      allCoords.push(values[i], values[i + 1]);
+      if (values[i] < bbox.minLon) bbox.minLon = values[i];
+      if (values[i] > bbox.maxLon) bbox.maxLon = values[i];
+      if (values[i + 1] < bbox.minLat) bbox.minLat = values[i + 1];
+      if (values[i + 1] > bbox.maxLat) bbox.maxLat = values[i + 1];
+    }
+  }
+}
+
+/** Load Arrow IPC with GeoArrow geometry columns.
+ *  Extracts typed arrays from nested Arrow structure for binary deck.gl rendering. */
+async function loadGeoArrowData(
+  url: string,
+  geomColumnName: string,
+): Promise<GeoArrowData | null> {
+  const arrow = await import('apache-arrow');
+  const chunks = await fetchArrowChunks(url);
+
+  // Parse chunks into tables
+  const tables: any[] = [];
+  for (const chunk of chunks) {
+    try {
+      const t = arrow.tableFromIPC(chunk);
+      if (t.numRows > 0) tables.push(t);
+    } catch { /* skip */ }
+  }
+  if (tables.length === 0) return null;
+
+  // Detect extension type from first table
+  const schema = tables[0].schema;
+  const geomColIdx = schema.fields.findIndex((f: any) => f.name === geomColumnName);
+  if (geomColIdx === -1) return null;
+
+  const field = schema.fields[geomColIdx];
+  const extensionName = field.metadata?.get('ARROW:extension:name') || null;
+  if (!extensionName || !GA_EXT_NAMES.has(extensionName)) return null;
+
+  // Collect coordinates and offsets from ALL batches.
+  // Each batch has its own Data structure; we merge them into single typed arrays.
+  const allCoords: number[] = [];
+  const allStartIndices: number[] = [];
+  let totalRows = 0;
+  const bbox: BBox = { minLon: Infinity, maxLon: -Infinity, minLat: Infinity, maxLat: -Infinity };
+
+  // Also collect property columns for accessors
+  const propColData: Map<number, any[]> = new Map(); // colIdx → values[]
+  for (let ci = 0; ci < schema.fields.length; ci++) {
+    if (ci !== geomColIdx) propColData.set(ci, []);
+  }
+
+  for (const t of tables) {
+    for (const batch of t.batches) {
+      const geomCol = batch.getChildAt(geomColIdx);
+      if (!geomCol) continue;
+      const data0 = geomCol.data[0];
+      const batchRows = batch.numRows;
+
+      // Extract coords from this batch's geometry data
+      extractCoordsFromData(data0, extensionName, batchRows, allCoords, allStartIndices, totalRows, bbox);
+
+      // Collect property values
+      for (const [ci, values] of propColData) {
+        const col = batch.getChildAt(ci);
+        for (let r = 0; r < batchRows; r++) {
+          values.push(col ? col.get(r) : null);
+        }
+      }
+
+      totalRows += batchRows;
+    }
+  }
+
+  if (totalRows === 0) return null;
+
+  const flatCoords = new Float64Array(allCoords);
+  const startIndices = new Uint32Array(allStartIndices);
+
+  // Build a merged table for property access (store as simple object)
+  const mergedTable = { schema, numRows: totalRows, propColData, geomColIdx };
+
+  return { extensionName, flatCoords, startIndices, numRows: totalRows, bbox, table: mergedTable, geomColIdx };
+}
+
+/** Build deck.gl layers from GeoArrow binary data — zero JS objects. */
+function buildGeoArrowLayers(
+  geoData: GeoArrowData,
+  colorAcc: any,
+  sizeAcc: any,
+  heightAcc: any,
+): any[] {
+  const layers: any[] = [];
+  const ext = geoData.extensionName;
+  const isPoint = ext === 'geoarrow.point' || ext === 'geoarrow.multipoint';
+  const isLine = ext === 'geoarrow.linestring' || ext === 'geoarrow.multilinestring';
+  const isPolygon = ext === 'geoarrow.polygon' || ext === 'geoarrow.multipolygon';
+
+  if (isPoint) {
+    layers.push(new ScatterplotLayer({
+      id: 'hugr-map-points',
+      data: {
+        length: geoData.numRows,
+        attributes: {
+          getPosition: { value: geoData.flatCoords, size: 2 },
+        },
+      },
+      getFillColor: colorAcc || FILL_COLOR,
+      getLineColor: STROKE_COLOR,
+      getRadius: sizeAcc || 6,
+      radiusUnits: 'pixels' as any,
+      radiusMinPixels: 2,
+      stroked: true,
+      lineWidthMinPixels: 1,
+      opacity: 0.85,
+      pickable: true,
+    }));
+  }
+
+  if (isLine) {
+    layers.push(new PathLayer({
+      id: 'hugr-map-lines',
+      data: {
+        length: geoData.numRows,
+        startIndices: geoData.startIndices,
+        attributes: {
+          getPath: { value: geoData.flatCoords, size: 2 },
+        },
+      },
+      _pathType: 'open',
+      getColor: colorAcc || FILL_COLOR,
+      getWidth: sizeAcc || 2,
+      widthUnits: 'pixels' as any,
+      widthMinPixels: 1,
+      opacity: 0.85,
+      pickable: true,
+    } as any));
+  }
+
+  if (isPolygon) {
+    layers.push(new SolidPolygonLayer({
+      id: 'hugr-map-polygons',
+      data: {
+        length: geoData.numRows,
+        startIndices: geoData.startIndices,
+        attributes: {
+          getPolygon: { value: geoData.flatCoords, size: 2 },
+        },
+      },
+      _normalize: false,
+      getFillColor: colorAcc || FILL_COLOR,
+      getLineColor: STROKE_COLOR,
+      getElevation: heightAcc || 0,
+      extruded: !!heightAcc,
+      opacity: 0.85,
+      pickable: true,
+      filled: true,
+    } as any));
+  }
+
+  return layers;
+}
+
+/** Build a color accessor for binary data format (index-based).
+ *  Works with merged table from loadGeoArrowData. */
+function buildBinaryColorAccessor(
+  table: any, colName: string, colType: string, geomColIdx: number,
+): ((obj: any, info: { index: number }) => [number, number, number, number]) | null {
+  if (!colName) return null;
+  const colIdx = table.schema.fields.findIndex((f: any) => f.name === colName);
+  if (colIdx === -1) return null;
+  const values: any[] = table.propColData?.get(colIdx);
+  if (!values) return null;
+
+  if (colType === 'string' || colType === 'boolean') {
+    const valMap = new Map<string, number>();
+    for (const v of values) {
+      const s = String(v ?? '');
+      if (!valMap.has(s)) valMap.set(s, valMap.size);
+    }
+    return (_obj: any, info: { index: number }) => {
+      const s = String(values[info.index] ?? '');
+      const idx = valMap.get(s) ?? 0;
+      return CATEGORY_COLORS[idx % CATEGORY_COLORS.length];
+    };
+  } else {
+    let min = Infinity, max = -Infinity;
+    for (const v of values) {
+      const n = Number(v);
+      if (isFinite(n)) { if (n < min) min = n; if (n > max) max = n; }
+    }
+    const range = max - min || 1;
+    return (_obj: any, info: { index: number }) => {
+      const v = Number(values[info.index]);
+      return isFinite(v) ? colorScale((v - min) / range) : FILL_COLOR;
+    };
+  }
+}
+
+/** Build a float accessor for binary data (index-based). */
+function buildBinaryFloatAccessor(
+  table: any, colName: string,
+): ((obj: any, info: { index: number }) => number) | null {
+  if (!colName) return null;
+  const colIdx = table.schema.fields.findIndex((f: any) => f.name === colName);
+  if (colIdx === -1) return null;
+  const values: any[] = table.propColData?.get(colIdx);
+  if (!values) return null;
+  return (_obj: any, info: { index: number }) => {
+    const v = Number(values[info.index]);
+    return isFinite(v) ? Math.max(0, v) : 0;
+  };
+}
+
+/** Compute initial view state that fits all features. */
+function computeViewState(bbox: BBox): MapViewState {
+  if (!isFinite(bbox.minLon)) {
+    return { longitude: 0, latitude: 0, zoom: 2, pitch: 0, bearing: 0 };
+  }
+
+  const centerLon = (bbox.minLon + bbox.maxLon) / 2;
+  const centerLat = (bbox.minLat + bbox.maxLat) / 2;
+  const dLon = bbox.maxLon - bbox.minLon;
+  const dLat = bbox.maxLat - bbox.minLat;
+  const maxSpan = Math.max(dLon, dLat);
+
+  let zoom = 12;
+  if (maxSpan > 0) {
+    zoom = Math.max(1, Math.min(18, Math.floor(-Math.log2(maxSpan / 360))));
+  }
+
+  return { longitude: centerLon, latitude: centerLat, zoom, pitch: 0, bearing: 0 };
+}
+
+/** Default colors for geometry layers. */
+const FILL_COLOR: [number, number, number, number] = [65, 135, 220, 180];
+const STROKE_COLOR: [number, number, number, number] = [40, 90, 160, 220];
+const H3_FILL_COLOR: [number, number, number, number] = [255, 140, 0, 180];
+
+/** Map styling configuration. */
+interface MapStyle {
+  fillColor: [number, number, number, number];
+  strokeColor: [number, number, number, number];
+  opacity: number;
+  pointRadius: number;
+  colorColumn?: string; // numeric column for data-driven color
+  sizeColumn?: string; // numeric column for data-driven point size
+}
+
+const DEFAULT_STYLE: MapStyle = {
+  fillColor: [...FILL_COLOR] as [number, number, number, number],
+  strokeColor: [...STROKE_COLOR] as [number, number, number, number],
+  opacity: 1,
+  pointRadius: 5,
+};
+
+/** Blue-to-red gradient for data-driven color mapping. */
+function colorScale(t: number): [number, number, number, number] {
+  // t in [0,1] → blue(0) → cyan → green → yellow → red(1)
+  const r = Math.round(Math.min(255, Math.max(0, t < 0.5 ? t * 2 * 255 : 255)));
+  const g = Math.round(Math.min(255, Math.max(0, t < 0.5 ? 255 : (1 - t) * 2 * 255)));
+  const b = Math.round(Math.min(255, Math.max(0, t < 0.5 ? (1 - t * 2) * 255 : 0)));
+  return [r, g, b, 200];
+}
+
+/** Compute min/max for a numeric property across features. */
+function computeMinMax(features: FeatureRow[], propName: string): [number, number] {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const f of features) {
+    const v = Number(f.properties[propName]);
+    if (isFinite(v)) {
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+  }
+  return [min, max];
+}
+
+/** Build deck.gl layers from parsed features with optional styling. */
+function buildLayers(features: FeatureRow[], geomType: number, style: MapStyle = DEFAULT_STYLE): any[] {
+  const layers: any[] = [];
+
+  const points = features.filter(f => f.position);
+  const lines = features.filter(f => f.path);
+  const polygons = features.filter(f => f.polygon);
+  const h3Cells = features.filter(f => f.h3Index);
+
+  // Data-driven color accessor
+  let colorAccessor: any = style.fillColor;
+  if (style.colorColumn) {
+    const [cMin, cMax] = computeMinMax(features, style.colorColumn);
+    const range = cMax - cMin || 1;
+    colorAccessor = (d: FeatureRow) => {
+      const v = Number(d.properties[style.colorColumn!]);
+      return isFinite(v) ? colorScale((v - cMin) / range) : style.fillColor;
+    };
+  }
+
+  // Data-driven size accessor for points
+  let radiusAccessor: any = style.pointRadius;
+  if (style.sizeColumn) {
+    const [sMin, sMax] = computeMinMax(features, style.sizeColumn);
+    const range = sMax - sMin || 1;
+    radiusAccessor = (d: FeatureRow) => {
+      const v = Number(d.properties[style.sizeColumn!]);
+      return isFinite(v) ? 3 + ((v - sMin) / range) * 17 : style.pointRadius;
+    };
+  }
+
+  if (points.length > 0) {
+    layers.push(new ScatterplotLayer({
+      id: 'hugr-map-points',
+      data: points,
+      getPosition: (d: FeatureRow) => d.position!,
+      getFillColor: colorAccessor,
+      getLineColor: style.strokeColor,
+      getRadius: radiusAccessor,
+      radiusUnits: 'pixels' as any,
+      radiusMinPixels: 2,
+      radiusMaxPixels: 30,
+      stroked: true,
+      lineWidthMinPixels: 1,
+      opacity: style.opacity,
+      pickable: true,
+      updateTriggers: {
+        getFillColor: [style.colorColumn, style.fillColor],
+        getRadius: [style.sizeColumn, style.pointRadius],
+      },
+    }));
+  }
+
+  if (lines.length > 0) {
+    layers.push(new PathLayer({
+      id: 'hugr-map-lines',
+      data: lines,
+      getPath: (d: FeatureRow) => d.path! as any,
+      getColor: colorAccessor,
+      getWidth: 2,
+      widthUnits: 'pixels' as any,
+      widthMinPixels: 1,
+      opacity: style.opacity,
+      pickable: true,
+      updateTriggers: {
+        getColor: [style.colorColumn, style.fillColor],
+      },
+    }));
+  }
+
+  if (polygons.length > 0) {
+    layers.push(new SolidPolygonLayer({
+      id: 'hugr-map-polygons',
+      data: polygons,
+      getPolygon: (d: FeatureRow) => d.polygon! as any,
+      getFillColor: colorAccessor,
+      getLineColor: style.strokeColor,
+      opacity: style.opacity,
+      pickable: true,
+      filled: true,
+      extruded: false,
+      updateTriggers: {
+        getFillColor: [style.colorColumn, style.fillColor],
+      },
+    }));
+  }
+
+  if (h3Cells.length > 0) {
+    layers.push(new H3HexagonLayer({
+      id: 'hugr-map-h3',
+      data: h3Cells,
+      getHexagon: (d: FeatureRow) => d.h3Index!,
+      getFillColor: colorAccessor !== style.fillColor ? colorAccessor : H3_FILL_COLOR,
+      getLineColor: style.strokeColor,
+      extruded: false,
+      opacity: style.opacity,
+      pickable: true,
+      updateTriggers: {
+        getFillColor: [style.colorColumn, style.fillColor],
+      },
+    }));
+  }
+
+  return layers;
+}
+
+/** Build basemap tile layers from tile source configuration. */
+function buildBasemapLayers(tileSources: TileSourceMeta[]): any[] {
+  if (!tileSources || tileSources.length === 0) return [];
+
+  // Use the first tile source as the active basemap
+  const source = tileSources[0];
+
+  if (source.type === 'raster' || source.type === 'tilejson') {
+    return [new TileLayer({
+      id: 'hugr-basemap-tiles',
+      data: source.url,
+      minZoom: source.min_zoom ?? 0,
+      maxZoom: source.max_zoom ?? 19,
+      renderSubLayers: (props: any) => {
+        const { boundingBox } = props.tile;
+        return new BitmapLayer(props, {
+          data: undefined,
+          image: props.data,
+          bounds: [boundingBox[0][0], boundingBox[0][1], boundingBox[1][0], boundingBox[1][1]],
+        });
+      },
+    })];
+  }
+
+  // Vector/MVT tiles — not implemented yet, return empty
+  return [];
+}
+
+/** Approximate area of a polygon ring (Shoelace formula, in degrees²). */
+function ringArea(ring: number[][]): number {
+  let area = 0;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    area += (ring[j][0] - ring[i][0]) * (ring[j][1] + ring[i][1]);
+  }
+  return Math.abs(area / 2);
+}
+
+/** Approximate length of a path (Haversine, in km). */
+function pathLength(coords: number[][]): number {
+  let total = 0;
+  for (let i = 1; i < coords.length; i++) {
+    const [lon1, lat1] = coords[i - 1];
+    const [lon2, lat2] = coords[i];
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+    total += 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+  return total;
+}
+
+/** Format a tooltip from feature properties, with optional measurement info. */
+function formatTooltip(feature: FeatureRow): string {
+  const parts: string[] = [];
+  const entries = Object.entries(feature.properties).filter(([, v]) => v !== null && v !== undefined);
+  if (entries.length > 0) {
+    parts.push(...entries.map(([k, v]) => `<b>${k}</b>: ${v}`));
+  }
+  // Measurement info
+  if (feature.polygon && feature.polygon.length >= 3) {
+    const a = ringArea(feature.polygon);
+    // Convert degree² to approximate km² (very rough at equator)
+    const aKm = a * 111.32 * 111.32;
+    parts.push(`<i>Area: ~${aKm < 1 ? (aKm * 1e6).toFixed(0) + ' m²' : aKm.toFixed(2) + ' km²'}</i>`);
+  }
+  if (feature.path && feature.path.length >= 2) {
+    const len = pathLength(feature.path);
+    parts.push(`<i>Length: ~${len < 1 ? (len * 1000).toFixed(0) + ' m' : len.toFixed(2) + ' km'}</i>`);
+  }
+  return parts.join('<br/>');
+}
+
+/**
+ * Register the map plugin with Perspective.
+ * Must be called after Perspective custom elements are defined.
+ */
+/** Convert [r,g,b,a] to hex color string. */
+function rgbToHex(c: [number, number, number, number]): string {
+  return '#' + [c[0], c[1], c[2]].map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
+/** Convert hex color string to [r,g,b,a]. */
+function hexToRgba(hex: string, alpha: number): [number, number, number, number] {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return [r, g, b, alpha];
+}
+
+/** Default OSM tile URL for basemap when no tile sources configured. */
+/** CARTO Positron — light, clean basemap. Free, no API key required. */
+const DEFAULT_TILE_URL = 'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png';
+
+/** Categorical color palette (10 distinct colors). */
+const CATEGORY_COLORS: [number, number, number, number][] = [
+  [31, 119, 180, 200], [255, 127, 14, 200], [44, 160, 44, 200],
+  [214, 39, 40, 200], [148, 103, 189, 200], [140, 86, 75, 200],
+  [227, 119, 194, 200], [127, 127, 127, 200], [188, 189, 34, 200],
+  [23, 190, 207, 200],
+];
+
+/** Build a color accessor from features for a given column name and schema type. */
+function buildColorAccessor(
+  features: FeatureRow[], colName: string, colType: string
+): ((d: FeatureRow) => [number, number, number, number]) | null {
+  if (!colName || features.length === 0) return null;
+
+  if (colType === 'string' || colType === 'boolean') {
+    // Categorical: assign distinct colors
+    const uniqueVals = [...new Set(features.map(f => String(f.properties[colName] ?? '')))];
+    const valToIdx = new Map(uniqueVals.map((v, i) => [v, i]));
+    return (d: FeatureRow) => {
+      const idx = valToIdx.get(String(d.properties[colName] ?? '')) ?? 0;
+      return CATEGORY_COLORS[idx % CATEGORY_COLORS.length];
+    };
+  } else {
+    // Numeric: continuous gradient
+    const [cMin, cMax] = computeMinMax(features, colName);
+    const range = cMax - cMin || 1;
+    return (d: FeatureRow) => {
+      const v = Number(d.properties[colName]);
+      return isFinite(v) ? colorScale((v - cMin) / range) : FILL_COLOR;
+    };
+  }
+}
+
+/** Build a size accessor from features for a given column name. */
+function buildSizeAccessor(
+  features: FeatureRow[], colName: string, minSize: number, maxSize: number
+): ((d: FeatureRow) => number) | null {
+  if (!colName || features.length === 0) return null;
+  const [sMin, sMax] = computeMinMax(features, colName);
+  const range = sMax - sMin || 1;
+  return (d: FeatureRow) => {
+    const v = Number(d.properties[colName]);
+    return isFinite(v) ? minSize + ((v - sMin) / range) * (maxSize - minSize) : minSize;
+  };
+}
+
+/** Build deck.gl layers using column slot accessors. */
+function buildMappedLayers(
+  features: FeatureRow[],
+  geomType: number,
+  colorAccessor: ((d: FeatureRow) => [number, number, number, number]) | null,
+  sizeAccessor: ((d: FeatureRow) => number) | null,
+  heightAccessor: ((d: FeatureRow) => number) | null,
+): any[] {
+  const layers: any[] = [];
+  const defaultColor = FILL_COLOR;
+
+  const points = features.filter(f => f.position);
+  const lines = features.filter(f => f.path);
+  const polygons = features.filter(f => f.polygon);
+  const h3Cells = features.filter(f => f.h3Index);
+
+  if (points.length > 0) {
+    layers.push(new ScatterplotLayer({
+      id: 'hugr-map-points',
+      data: points,
+      getPosition: (d: FeatureRow) => d.position!,
+      getFillColor: colorAccessor || defaultColor,
+      getLineColor: STROKE_COLOR,
+      getRadius: sizeAccessor || 6,
+      radiusUnits: 'pixels' as any,
+      radiusMinPixels: 2,
+      radiusMaxPixels: 40,
+      stroked: true,
+      lineWidthMinPixels: 1,
+      opacity: 0.85,
+      pickable: true,
+      updateTriggers: {
+        getFillColor: [colorAccessor],
+        getRadius: [sizeAccessor],
+      },
+    }));
+  }
+
+  if (lines.length > 0) {
+    layers.push(new PathLayer({
+      id: 'hugr-map-lines',
+      data: lines,
+      getPath: (d: FeatureRow) => d.path! as any,
+      getColor: colorAccessor || defaultColor,
+      getWidth: sizeAccessor || 2,
+      widthUnits: 'pixels' as any,
+      widthMinPixels: 1,
+      opacity: 0.85,
+      pickable: true,
+      updateTriggers: {
+        getColor: [colorAccessor],
+        getWidth: [sizeAccessor],
+      },
+    }));
+  }
+
+  if (polygons.length > 0) {
+    const extruded = !!heightAccessor;
+    layers.push(new SolidPolygonLayer({
+      id: 'hugr-map-polygons',
+      data: polygons,
+      getPolygon: (d: FeatureRow) => d.polygon! as any,
+      getFillColor: colorAccessor || defaultColor,
+      getLineColor: STROKE_COLOR,
+      getElevation: heightAccessor || 0,
+      extruded,
+      opacity: 0.85,
+      pickable: true,
+      filled: true,
+      updateTriggers: {
+        getFillColor: [colorAccessor],
+        getElevation: [heightAccessor],
+      },
+    }));
+  }
+
+  if (h3Cells.length > 0) {
+    layers.push(new H3HexagonLayer({
+      id: 'hugr-map-h3',
+      data: h3Cells,
+      getHexagon: (d: FeatureRow) => d.h3Index!,
+      getFillColor: colorAccessor || H3_FILL_COLOR,
+      getLineColor: STROKE_COLOR,
+      getElevation: heightAccessor || 0,
+      extruded: !!heightAccessor,
+      opacity: 0.85,
+      pickable: true,
+      updateTriggers: {
+        getFillColor: [colorAccessor],
+        getElevation: [heightAccessor],
+      },
+    }));
+  }
+
+  return layers;
+}
+
+// Globe/map SVG icon for the plugin selector (16x16)
+const MAP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none">
+  <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.2"/>
+  <ellipse cx="8" cy="8" rx="3" ry="6.5" stroke="currentColor" stroke-width="1"/>
+  <line x1="1.5" y1="5.5" x2="14.5" y2="5.5" stroke="currentColor" stroke-width="0.8"/>
+  <line x1="1.5" y1="10.5" x2="14.5" y2="10.5" stroke="currentColor" stroke-width="0.8"/>
+  <line x1="8" y1="1.5" x2="8" y2="14.5" stroke="currentColor" stroke-width="0.8"/>
+</svg>`;
+const MAP_ICON_B64 = 'data:image/svg+xml;base64,' + btoa(MAP_ICON_SVG);
+
+export async function registerMapPlugin(): Promise<void> {
+  if (customElements.get('perspective-viewer-map')) return;
+
+  // Inject plugin icon CSS variable on host (inherits into shadow DOM)
+  // and add the selector rule for our plugin name
+  const iconStyle = document.createElement('style');
+  iconStyle.textContent = `
+    perspective-viewer, perspective-workspace {
+      --plugin-selector-geo-map--content: url("${MAP_ICON_B64}");
+    }
+  `;
+  document.head.appendChild(iconStyle);
+
+  // Inject shadow DOM CSS rule for the "Geo Map" plugin icon.
+  // Perspective's shadow DOM uses [data-plugin="Name"]:before with mask-image.
+  // We observe viewers appearing and inject the rule into their shadow roots.
+  const injectGeoMapIcon = (viewer: Element) => {
+    const sr = viewer.shadowRoot;
+    if (!sr || sr.querySelector('#geo-map-icon-style')) return;
+    const s = document.createElement('style');
+    s.id = 'geo-map-icon-style';
+    s.textContent = `.plugin-select-item[data-plugin="Geo Map"]:before { -webkit-mask-image: var(--plugin-selector-geo-map--content); mask-image: var(--plugin-selector-geo-map--content); }`;
+    sr.appendChild(s);
+  };
+
+  // Inject into existing viewers
+  document.querySelectorAll('perspective-viewer').forEach(injectGeoMapIcon);
+
+  // Watch for new viewers
+  new MutationObserver((mutations) => {
+    for (const m of mutations) {
+      for (const n of m.addedNodes) {
+        if (n instanceof Element) {
+          if (n.tagName === 'PERSPECTIVE-VIEWER') injectGeoMapIcon(n);
+          n.querySelectorAll?.('perspective-viewer').forEach(injectGeoMapIcon);
+        }
+      }
+    }
+  }).observe(document.body, { childList: true, subtree: true });
+
+  customElements.define('perspective-viewer-map', class extends HTMLElement {
+    private _deck: any = null;
+    private _container: HTMLDivElement | null = null;
+    private _features: FeatureRow[] = [];
+    private _geomType: number = 0;
+    private _viewState: MapViewState = { longitude: 0, latitude: 0, zoom: 2, pitch: 0, bearing: 0 };
+    private _tileSources: TileSourceMeta[] = [];
+
+    // --- Plugin identity ---
+    get name() { return 'Geo Map'; }
+    get select_mode() { return 'select'; }
+    get category() { return 'Map'; }
+    get priority() { return 0; }
+    get group_rollups() { return ['flat']; }
+    get render_warning() { return false; }
+    set render_warning(_: boolean) { /* no-op */ }
+    get max_cells() { return 2_000_000_000; }
+    get max_columns() { return 1000; }
+
+    // --- Column slot configuration ---
+    // Slots: [0]=Geometry, [1]=Color, [2]=Size, [3]=Height, [4]=Tooltip
+    get config_column_names() { return ['Geometry', 'Color', 'Size', 'Height', 'Tooltip']; }
+    get min_config_columns() { return 1; }
+
+    connectedCallback() {
+      if (this.shadowRoot) return; // already attached
+      this.attachShadow({ mode: 'open' });
+      this.shadowRoot!.innerHTML = `
+        <style>
+          :host { display:block; width:100%; height:100%; position:relative; }
+          #map-container { width:100%; height:100%; position:relative; background:#e5e3df; }
+          #map-container canvas { position:absolute; top:0; left:0; }
+          #no-geom { display:flex; align-items:center; justify-content:center;
+            width:100%; height:100%; color:#888; font:14px sans-serif; }
+        </style>
+        <div id="map-container"></div>
+      `;
+      this._container = this.shadowRoot!.getElementById('map-container') as HTMLDivElement;
+    }
+
+    /** Read null-padded slot columns from the viewer.
+     *  Uses viewer.getViewConfig() which is non-blocking (safe from draw). */
+    private async _getSlotColumns(view: any, viewer: any): Promise<(string | null)[]> {
+      const SLOT_COUNT = 5;
+      if (viewer?.getViewConfig) {
+        try {
+          const config = await viewer.getViewConfig();
+          if (config && Array.isArray(config.columns) && config.columns.length >= SLOT_COUNT) {
+            return config.columns;
+          }
+        } catch {}
+      }
+      let rawCols: (string | null)[] = [];
+      try {
+        const viewConfig = await view.get_config();
+        rawCols = viewConfig.columns || [];
+      } catch {}
+      while (rawCols.length < SLOT_COUNT) rawCols.push(null);
+      return rawCols;
+    }
+
+    async draw(view: any) {
+      if (!this._container) return;
+
+      const viewer = this.parentElement as any;
+
+      // Read geometry metadata
+      let geomMeta: GeometryColumnMeta[] = [];
+      try {
+        const geomAttr = viewer?.getAttribute('data-geometry-columns');
+        if (geomAttr) geomMeta = JSON.parse(geomAttr);
+      } catch {}
+      try {
+        const tileAttr = viewer?.getAttribute('data-tile-sources');
+        if (tileAttr) this._tileSources = JSON.parse(tileAttr);
+      } catch {}
+
+      // Get null-padded slot columns
+      const columns = await this._getSlotColumns(view, viewer);
+      const geomNames = new Set(geomMeta.map(g => g.name));
+
+      // Auto-fix: if slot[0] is not a geometry column, put geometry first
+      if (columns[0] && !geomNames.has(columns[0]) && geomMeta.length > 0 && viewer?.restore) {
+        const SLOT_COUNT = 5;
+        const geomCol = geomMeta[0].name;
+        const fixed: (string | null)[] = new Array(SLOT_COUNT).fill(null);
+        fixed[0] = geomCol;
+        let slot = 1;
+        for (const c of columns) {
+          if (c === null || c === geomCol) continue;
+          if (slot < SLOT_COUNT) { fixed[slot] = c; slot++; }
+        }
+        viewer.restore({ columns: fixed });
+        return;
+      }
+
+      // Slots: [0]=Geometry, [1]=Color, [2]=Size, [3]=Height, [4]=Tooltip
+      const geomColName = columns[0] || null;
+      const colorColName = columns[1] || null;
+      const sizeColName = columns[2] || null;
+      const heightColName = columns[3] || null;
+      const tooltipColName = columns[4] || null;
+
+      console.log('[map-plugin] slot mapping:', { geomColName, colorColName, sizeColName, heightColName, tooltipColName });
+
+      // Find geometry column metadata
+      let activeGeomCol = geomMeta.find(g => g.name === geomColName) || null;
+      if (!activeGeomCol && geomMeta.length > 0) activeGeomCol = geomMeta[0];
+
+      if (!activeGeomCol) {
+        this._container.innerHTML = '';
+        const noGeom = document.createElement('div');
+        noGeom.id = 'no-geom';
+        noGeom.textContent = 'Drag a geometry column to the Geometry slot';
+        this._container.appendChild(noGeom);
+        return;
+      }
+
+      // Get schema for column type info
+      let schema: Record<string, string> = {};
+      try { schema = await view.schema(); } catch {}
+
+      const arrowUrl = viewer?.getAttribute('data-arrow-url') || null;
+
+      try {
+        // Try GeoArrow binary path first (zero-copy to GPU)
+        const geoArrowUrl = arrowUrl ? arrowUrl + (arrowUrl.includes('?') ? '&' : '?') + 'geoarrow=1' : null;
+        let geoData: GeoArrowData | null = null;
+        // GeoArrow binary path: only for WKB/GeoArrow formats (not H3Cell, GeoJSON)
+        const useGeoArrow = geoArrowUrl && activeGeomCol.format !== 'H3Cell' && activeGeomCol.format !== 'GeoJSON';
+        if (useGeoArrow) {
+          try {
+            geoData = await loadGeoArrowData(geoArrowUrl, activeGeomCol.name);
+          } catch (e) {
+            console.warn('[map-plugin] GeoArrow path failed, falling back to WKB:', e);
+          }
+        }
+
+        if (geoData) {
+          // ── GeoArrow binary path ──
+          const colorAcc = colorColName
+            ? buildBinaryColorAccessor(geoData.table, colorColName, schema[colorColName] || 'string', geoData.geomColIdx)
+            : null;
+          const sizeAcc = sizeColName
+            ? buildBinaryFloatAccessor(geoData.table, sizeColName)
+            : null;
+          const heightAcc = heightColName
+            ? buildBinaryFloatAccessor(geoData.table, heightColName)
+            : null;
+
+          const isFirstDraw = this._deck === null;
+          if (isFirstDraw) {
+            this._viewState = computeViewState(geoData.bbox);
+            if (heightColName) this._viewState.pitch = 45;
+          }
+
+          const dataLayers = buildGeoArrowLayers(geoData, colorAcc, sizeAcc, heightAcc);
+          this._renderDeckLayers(dataLayers);
+        } else {
+          // ── WKB / fallback path ──
+          let features: FeatureRow[];
+          let geomType: number;
+          let bbox: BBox;
+
+          if (arrowUrl) {
+            ({ features, geomType, bbox } = await parseArrowToFeatures(
+              arrowUrl, activeGeomCol.name, activeGeomCol.format
+            ));
+          } else {
+            ({ features, geomType, bbox } = await this._parseFeaturesFromView(view, activeGeomCol));
+          }
+
+          const colorAcc = colorColName
+            ? buildColorAccessor(features, colorColName, schema[colorColName] || 'string')
+            : null;
+          const sizeAcc = sizeColName
+            ? buildSizeAccessor(features, sizeColName, 3, 25)
+            : null;
+          const heightAcc = heightColName
+            ? buildSizeAccessor(features, heightColName, 0, 50000)
+            : null;
+
+          if (tooltipColName) {
+            for (const f of features) f.properties.__tooltipColumn = tooltipColName;
+          }
+
+          const isFirstDraw = this._deck === null;
+          this._features = features;
+          this._geomType = geomType;
+
+          if (isFirstDraw) {
+            this._viewState = computeViewState(bbox);
+            if (heightColName) this._viewState.pitch = 45;
+          }
+
+          this._renderDeck(colorAcc, sizeAcc, heightAcc);
+        }
+      } catch (err) {
+        console.error('[map-plugin] draw error:', err);
+        this._container.innerHTML = `<div id="no-geom">Error loading map data: ${(err as Error).message}</div>`;
+      }
+    }
+
+    private async _parseFeaturesFromView(
+      view: any, geomCol: GeometryColumnMeta
+    ): Promise<{ features: FeatureRow[]; geomType: number; bbox: BBox }> {
+      const features: FeatureRow[] = [];
+      const bbox: BBox = { minLon: Infinity, maxLon: -Infinity, minLat: Infinity, maxLat: -Infinity };
+      let detectedType = 0;
+
+      const json = await view.to_json();
+      if (!json || json.length === 0) return { features, geomType: 0, bbox };
+
+      for (const row of json) {
+        const geomValue = row[geomCol.name];
+        if (!geomValue) continue;
+
+        const properties: Record<string, any> = {};
+        for (const [k, v] of Object.entries(row)) {
+          if (k !== geomCol.name) properties[k] = v;
+        }
+
+        if (geomCol.format === 'H3Cell') {
+          features.push({ h3Index: String(geomValue), properties });
+          continue;
+        }
+
+        let wkbBytes: Uint8Array | null = null;
+        if (geomValue instanceof Uint8Array) {
+          wkbBytes = geomValue;
+        } else if (Array.isArray(geomValue)) {
+          wkbBytes = new Uint8Array(geomValue);
+        } else if (typeof geomValue === 'object' && geomValue !== null) {
+          const len = geomValue.length || geomValue.byteLength;
+          if (len > 0) {
+            wkbBytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) wkbBytes[i] = geomValue[i];
+          }
+        }
+        if (!wkbBytes) continue;
+
+        const parsed = parseWKB(wkbBytes);
+        if (!parsed) continue;
+        if (detectedType === 0) detectedType = parsed.type;
+
+        for (const coord of parsed.coordinates) {
+          if (coord[0] < bbox.minLon) bbox.minLon = coord[0];
+          if (coord[0] > bbox.maxLon) bbox.maxLon = coord[0];
+          if (coord[1] < bbox.minLat) bbox.minLat = coord[1];
+          if (coord[1] > bbox.maxLat) bbox.maxLat = coord[1];
+        }
+
+        const feat: FeatureRow = { properties };
+        switch (parsed.type) {
+          case WKB_POINT: feat.position = parsed.coordinates[0] as [number, number]; break;
+          case WKB_LINESTRING: feat.path = parsed.coordinates; break;
+          case WKB_POLYGON: feat.polygon = parsed.coordinates; break;
+        }
+        features.push(feat);
+      }
+
+      return { features, geomType: detectedType, bbox };
+    }
+
+    private _renderDeck(
+      colorAcc: ((d: FeatureRow) => [number, number, number, number]) | null,
+      sizeAcc: ((d: FeatureRow) => number) | null,
+      heightAcc: ((d: FeatureRow) => number) | null,
+    ) {
+      if (!this._container) return;
+
+      // Build basemap
+      let basemapLayers: any[];
+      if (this._tileSources.length > 0) {
+        basemapLayers = buildBasemapLayers(this._tileSources);
+      } else {
+        basemapLayers = buildBasemapLayers([{
+          name: 'CARTO Voyager',
+          url: DEFAULT_TILE_URL,
+          type: 'raster',
+          attribution: '© CARTO © OpenStreetMap contributors',
+          min_zoom: 0,
+          max_zoom: 19,
+        }]);
+      }
+
+      const dataLayers = buildMappedLayers(
+        this._features, this._geomType, colorAcc, sizeAcc, heightAcc
+      );
+
+      if (this._deck) {
+        this._deck.setProps({
+          layers: [...basemapLayers, ...dataLayers],
+          initialViewState: this._viewState,
+        });
+        return;
+      }
+
+      this._deck = new Deck({
+        parent: this._container,
+        initialViewState: this._viewState,
+        controller: true,
+        layers: [...basemapLayers, ...dataLayers],
+        getTooltip: ({ object }: any) => {
+          if (!object) return null;
+          const html = formatTooltip(object);
+          return html ? { html, style: { background: 'rgba(0,0,0,0.8)', color: '#fff', fontSize: '12px', padding: '6px 10px', borderRadius: '4px' } } : null;
+        },
+        onViewStateChange: ({ viewState }: any) => {
+          this._viewState = viewState;
+        },
+      });
+    }
+
+    /** Render with pre-built data layers (GeoArrow binary path). */
+    private _renderDeckLayers(dataLayers: any[]) {
+      if (!this._container) return;
+
+      let basemapLayers: any[];
+      if (this._tileSources.length > 0) {
+        basemapLayers = buildBasemapLayers(this._tileSources);
+      } else {
+        basemapLayers = buildBasemapLayers([{
+          name: 'CARTO Voyager',
+          url: DEFAULT_TILE_URL,
+          type: 'raster',
+          attribution: '© CARTO © OpenStreetMap contributors',
+          min_zoom: 0,
+          max_zoom: 19,
+        }]);
+      }
+
+      const allLayers = [...basemapLayers, ...dataLayers];
+
+      if (this._deck) {
+        this._deck.setProps({ layers: allLayers, initialViewState: this._viewState });
+        return;
+      }
+
+      this._deck = new Deck({
+        parent: this._container,
+        initialViewState: this._viewState,
+        controller: true,
+        layers: allLayers,
+        getTooltip: ({ object, index }: any) => {
+          // Binary data layers don't have object — use index
+          // TODO: build tooltip from Arrow table by index
+          if (!object && index === undefined) return null;
+          if (object) {
+            const html = formatTooltip(object);
+            return html ? { html, style: { background: 'rgba(0,0,0,0.8)', color: '#fff', fontSize: '12px', padding: '6px 10px', borderRadius: '4px' } } : null;
+          }
+          return null;
+        },
+        onViewStateChange: ({ viewState }: any) => {
+          this._viewState = viewState;
+        },
+      });
+    }
+
+    async update(view: any) { await this.draw(view); }
+
+    async clear() {
+      if (this._deck) { this._deck.finalize(); this._deck = null; }
+      if (this._container) this._container.innerHTML = '';
+    }
+
+    async resize() { if (this._deck) this._deck.redraw(); }
+    async restyle() {}
+    save() { return { viewState: this._viewState }; }
+    async restore(config: any) {
+      if (config?.viewState) this._viewState = config.viewState;
+    }
+    delete() { this.clear(); }
+  });
+
+  const Viewer = customElements.get('perspective-viewer') as any;
+  if (Viewer?.registerPlugin) {
+    Viewer.registerPlugin('perspective-viewer-map');
+  }
+}

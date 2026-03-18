@@ -29,8 +29,8 @@ const sidebarPlugin: JupyterFrontEndPlugin<void> = {
     console.log('[DuckDB Explorer] Sidebar plugin activated');
 
     document.addEventListener('hugr:open-in-tab', ((e: CustomEvent) => {
-      const { arrowUrl, title } = e.detail;
-      const content = new PerspectiveTabWidget(arrowUrl, title);
+      const { arrowUrl, title, geometryColumns, tileSources } = e.detail;
+      const content = new PerspectiveTabWidget(arrowUrl, title, geometryColumns, tileSources);
       const widget = new MainAreaWidget({ content });
       widget.title.label = title || 'Result';
       widget.title.closable = true;

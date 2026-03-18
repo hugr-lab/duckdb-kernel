@@ -16,9 +16,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/hugr-lab/duckdb-kernel/internal/engine"
 	"github.com/hugr-lab/duckdb-kernel/internal/spool"
+	"github.com/hugr-lab/duckdb-kernel/pkg/geoarrow"
 )
 
 const maxArrowRows = 5_000_000
@@ -111,12 +114,17 @@ func (as *ArrowServer) handleArrow(w http.ResponseWriter, r *http.Request) {
 
 // handleArrowStream serves Arrow data as length-prefixed chunks for streaming.
 // Each chunk is a complete Arrow IPC stream (schema + one batch + EOS).
-// Browser reads via ReadableStream and calls table.update() per chunk.
 //
 // Wire format: [4-byte little-endian length][Arrow IPC bytes] repeated.
 // A final 4-byte zero length signals end of stream.
 //
-// GET /arrow/stream?q=<queryID>&limit=<maxRows>
+// Query parameters:
+//   - q=<queryID>       — required
+//   - limit=<maxRows>   — optional row limit
+//   - geoarrow=1        — convert WKB columns to native GeoArrow (for deck.gl)
+//
+// Without geoarrow=1, WKB binary columns are replaced with string "{geometry}"
+// for Perspective compatibility.
 func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request) {
 	queryID := r.URL.Query().Get("q")
 	if queryID == "" {
@@ -131,6 +139,8 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	wantGeoArrow := r.URL.Query().Get("geoarrow") == "1"
+
 	reader, closer, err := as.spool.OpenReader(queryID)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -143,15 +153,24 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 	defer closer.Close()
 	defer reader.Release()
 
+	// For Perspective: wrap reader to replace geometry columns with string "{geometry}".
+	// For deck.gl (?geoarrow=1): serve as-is.
+	var source array.RecordReader = reader
+	if !wantGeoArrow {
+		replacer := geoarrow.NewStringReplacer(reader)
+		defer replacer.Release()
+		source = replacer
+	}
+
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	flusher, canFlush := w.(http.Flusher)
-	schema := reader.Schema()
+	var outSchema *arrow.Schema
 
 	written := 0
-	for reader.Next() {
-		rec := reader.RecordBatch()
+	for source.Next() {
+		rec := source.RecordBatch()
 		rows := int(rec.NumRows())
 
 		writeRec := rec
@@ -169,9 +188,13 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 			last = true
 		}
 
+		if outSchema == nil {
+			outSchema = writeRec.Schema()
+		}
+
 		// Serialize this batch as a complete Arrow IPC stream.
 		var buf bytes.Buffer
-		w2 := ipc.NewWriter(&buf, ipc.WithSchema(schema))
+		w2 := ipc.NewWriter(&buf, ipc.WithSchema(outSchema))
 		if err := w2.Write(writeRec); err != nil {
 			if sliced {
 				writeRec.Release()
@@ -190,7 +213,7 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 		lenBuf := make([]byte, 4)
 		binary.LittleEndian.PutUint32(lenBuf, uint32(len(chunk)))
 		if _, err := w.Write(lenBuf); err != nil {
-			break // Client disconnected.
+			break
 		}
 		if _, err := w.Write(chunk); err != nil {
 			break

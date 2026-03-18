@@ -120,7 +120,7 @@ func (i *Introspector) sessionInfo(ctx context.Context) (map[string]any, error) 
 	if err == nil {
 		defer reader.Release()
 		if reader.Next() {
-			rec := reader.Record()
+			rec := reader.RecordBatch()
 			if rec.NumRows() > 0 && rec.NumCols() > 0 {
 				if col, ok := rec.Column(0).(*array.String); ok {
 					version = strings.Clone(col.Value(0))
@@ -186,11 +186,11 @@ func (i *Introspector) queryToMaps(ctx context.Context, query string) ([]map[str
 	var results []map[string]any
 
 	for reader.Next() {
-		rec := reader.Record()
+		rec := reader.RecordBatch()
 		for rowIdx := int64(0); rowIdx < rec.NumRows(); rowIdx++ {
 			row := make(map[string]any, len(fields))
 			for colIdx, field := range fields {
-				row[field.Name] = formatValue(rec.Column(colIdx), int(rowIdx))
+				row[field.Name] = formatValue(rec.Column(colIdx), int(rowIdx), field)
 			}
 			results = append(results, row)
 		}

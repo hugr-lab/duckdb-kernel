@@ -11,9 +11,6 @@ import (
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
-	"github.com/apache/arrow-go/v18/arrow/memory"
-
-	qetypes "github.com/hugr-lab/query-engine/types"
 )
 
 const (
@@ -47,14 +44,13 @@ func NewSpool(sessionID string) (*Spool, error) {
 
 // StreamWriter writes Arrow record batches to an IPC streaming file.
 // Batches are flushed to disk immediately — no accumulation in memory.
-// Complex types (Struct, List, Map, Union) are automatically flattened
-// for compatibility with Perspective viewer.
+//
+// The caller is responsible for any transformations (flatten, geoarrow)
+// before calling Write. Use flatten.NewConverter and geoarrow.NewConverter
+// as RecordReader wrappers in the pipeline before writing.
 type StreamWriter struct {
-	w       *ipc.Writer
-	f       *os.File
-	flatten bool // cached: whether the schema needs flattening
-	checked bool // whether we've inspected the schema
-	mem     memory.Allocator
+	w *ipc.Writer
+	f *os.File
 }
 
 // NewStreamWriter creates a streaming IPC writer for the given query.
@@ -65,23 +61,13 @@ func (s *Spool) NewStreamWriter(queryID string) (*StreamWriter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create spool file: %w", err)
 	}
-	return &StreamWriter{f: f, mem: memory.DefaultAllocator}, nil
+	return &StreamWriter{f: f}, nil
 }
 
 // Write writes a single record batch to the IPC stream.
-// Complex types are automatically flattened for Perspective compatibility.
+// The batch should already be transformed (flattened, geoarrow-converted)
+// by the reader pipeline before calling Write.
 func (sw *StreamWriter) Write(rec arrow.RecordBatch) error {
-	if !sw.checked {
-		sw.flatten = qetypes.NeedsFlatten(rec.Schema())
-		sw.checked = true
-	}
-
-	if sw.flatten {
-		flat := qetypes.FlattenRecord(rec, sw.mem)
-		defer flat.Release()
-		rec = flat
-	}
-
 	if sw.w == nil {
 		sw.w = ipc.NewWriter(sw.f, ipc.WithSchema(rec.Schema()))
 	}

@@ -8,10 +8,28 @@
 
 import { IRenderMime } from '@jupyterlab/rendermime-interfaces';
 import { Widget } from '@lumino/widgets';
+import { registerMapPlugin } from './map-plugin';
 
 const MIME_TYPE = 'application/vnd.hugr.result+json';
 
 const STATIC_BASE = '/lab/extensions/@hugr-lab/perspective-viewer/static/perspective';
+
+/** Geometry column metadata from Arrow schema detection. */
+interface GeometryColumnMeta {
+  name: string;
+  srid: number;
+  format: string; // "WKB" | "GeoJSON" | "H3Cell"
+}
+
+/** Tile source configuration for map basemaps. */
+interface TileSourceMeta {
+  name: string;
+  url: string;
+  type: string; // "raster" | "vector" | "tilejson"
+  attribution?: string;
+  min_zoom?: number;
+  max_zoom?: number;
+}
 
 /** Backward-compatible flat metadata (single Arrow result). */
 interface FlatMetadata {
@@ -19,6 +37,8 @@ interface FlatMetadata {
   arrow_url?: string;
   rows?: number;
   columns?: { name: string; type: string }[];
+  geometry_columns?: GeometryColumnMeta[];
+  tile_sources?: TileSourceMeta[];
   data_size_bytes?: number;
   query_time_ms?: number;
   transfer_time_ms?: number;
@@ -32,6 +52,8 @@ interface PartDef {
   arrow_url?: string;
   rows?: number;
   columns?: { name: string; type: string }[];
+  geometry_columns?: GeometryColumnMeta[];
+  tile_sources?: TileSourceMeta[];
   data_size_bytes?: number;
   data?: any;
   errors?: { message: string; path?: string[]; extensions?: any }[];
@@ -65,6 +87,7 @@ function loadPerspective(): Promise<any> {
     }
 
     await customElements.whenDefined('perspective-viewer');
+    await registerMapPlugin();
     return perspective;
   })();
   _perspectiveReady.catch(() => {
@@ -242,6 +265,22 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
     this.node.innerHTML = '';
 
     const parts = metadata.parts!;
+
+    // Propagate top-level geometry metadata to individual parts
+    if (metadata.geometry_columns) {
+      for (const p of parts) {
+        if (!p.geometry_columns) {
+          p.geometry_columns = metadata.geometry_columns;
+        }
+      }
+    }
+    if (metadata.tile_sources) {
+      for (const p of parts) {
+        if (!p.tile_sources) {
+          p.tile_sources = metadata.tile_sources;
+        }
+      }
+    }
 
     // If only one part, render directly without tabs
     if (parts.length === 1) {
@@ -506,7 +545,12 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       openTabBtn.textContent = 'Open in Tab';
       openTabBtn.addEventListener('click', () => {
         document.dispatchEvent(new CustomEvent('hugr:open-in-tab', {
-          detail: { arrowUrl: buildFullUrl(part.arrow_url!), title: part.title || part.id || 'Result' }
+          detail: {
+            arrowUrl: buildFullUrl(part.arrow_url!),
+            title: part.title || part.id || 'Result',
+            geometryColumns: part.geometry_columns || [],
+            tileSources: part.tile_sources || [],
+          }
         }));
       });
       banner.appendChild(openTabBtn);
@@ -531,9 +575,28 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       viewer.setAttribute('plugin', 'Datagrid');
       container.appendChild(viewer);
 
+      // Pass geometry metadata to the map plugin
+      const geoCols = part.geometry_columns;
+      const tileSources = part.tile_sources;
+      if (geoCols && geoCols.length > 0) {
+        viewer.setAttribute('data-geometry-columns', JSON.stringify(geoCols));
+      }
+      if (tileSources && tileSources.length > 0) {
+        viewer.setAttribute('data-tile-sources', JSON.stringify(tileSources));
+      }
+      if (part.arrow_url) {
+        viewer.setAttribute('data-arrow-url', part.arrow_url);
+      }
+
       this._arrowParts.push({ viewer, table, client, abortController });
 
       await (viewer as any).load(table);
+
+      // Notify map plugin about geometry metadata
+      const mapPlugin = viewer.querySelector('perspective-viewer-map') as any;
+      if (mapPlugin && mapPlugin.setGeometryMeta) {
+        mapPlugin.setGeometryMeta(geoCols || [], tileSources || [], part.arrow_url || null);
+      }
     } catch (err: any) {
       loading.remove();
       const errorDiv = document.createElement('div');
@@ -800,7 +863,12 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
         openTabBtn.textContent = 'Open in Tab';
         openTabBtn.addEventListener('click', () => {
           document.dispatchEvent(new CustomEvent('hugr:open-in-tab', {
-            detail: { arrowUrl: buildFullUrl(metadata.arrow_url!), title: metadata.query_id || 'Result' }
+            detail: {
+              arrowUrl: buildFullUrl(metadata.arrow_url!),
+              title: metadata.query_id || 'Result',
+              geometryColumns: metadata.geometry_columns || [],
+              tileSources: metadata.tile_sources || [],
+            }
           }));
         });
         banner.appendChild(openTabBtn);
@@ -812,9 +880,28 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       viewer.setAttribute('plugin', 'Datagrid');
       this.node.appendChild(viewer);
 
+      // Pass geometry metadata to the map plugin
+      const geoCols = metadata.geometry_columns;
+      const tileSources = metadata.tile_sources;
+      if (geoCols && geoCols.length > 0) {
+        viewer.setAttribute('data-geometry-columns', JSON.stringify(geoCols));
+      }
+      if (tileSources && tileSources.length > 0) {
+        viewer.setAttribute('data-tile-sources', JSON.stringify(tileSources));
+      }
+      if (metadata.arrow_url) {
+        viewer.setAttribute('data-arrow-url', metadata.arrow_url);
+      }
+
       this._arrowParts.push({ viewer, table, client, abortController });
 
       await (viewer as any).load(table);
+
+      // Notify map plugin about geometry metadata
+      const mapPlugin = viewer.querySelector('perspective-viewer-map') as any;
+      if (mapPlugin && mapPlugin.setGeometryMeta) {
+        mapPlugin.setGeometryMeta(geoCols || [], tileSources || [], metadata.arrow_url || null);
+      }
     } catch (err: any) {
       const message = err?.message || 'Unknown error';
       this._showError(`Failed to initialize viewer: ${message}`);

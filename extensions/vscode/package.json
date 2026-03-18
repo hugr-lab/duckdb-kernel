@@ -67,14 +67,38 @@
     },
     "views": {
       "duckdb-explorer": [
-        { "id": "duckdb.session", "name": "Session" },
-        { "id": "duckdb.catalog", "name": "Catalog" },
-        { "id": "duckdb.systemFunctions", "name": "System Functions" },
-        { "id": "duckdb.extensions", "name": "Extensions" },
-        { "id": "duckdb.secrets", "name": "Secrets" },
-        { "id": "duckdb.settings", "name": "Settings" },
-        { "id": "duckdb.memory", "name": "Memory" },
-        { "id": "duckdb.resultFiles", "name": "Result Files" }
+        {
+          "id": "duckdb.session",
+          "name": "Session"
+        },
+        {
+          "id": "duckdb.catalog",
+          "name": "Catalog"
+        },
+        {
+          "id": "duckdb.systemFunctions",
+          "name": "System Functions"
+        },
+        {
+          "id": "duckdb.extensions",
+          "name": "Extensions"
+        },
+        {
+          "id": "duckdb.secrets",
+          "name": "Secrets"
+        },
+        {
+          "id": "duckdb.settings",
+          "name": "Settings"
+        },
+        {
+          "id": "duckdb.memory",
+          "name": "Memory"
+        },
+        {
+          "id": "duckdb.resultFiles",
+          "name": "Result Files"
+        }
       ]
     },
     "commands": [
@@ -229,5 +253,15 @@
     "@types/vscode-notebook-renderer": "^1.72.0",
     "esbuild": "^0.27.4",
     "typescript": "~5.8.0"
+  },
+  "dependencies": {
+    "@deck.gl/core": "^9.2.11",
+    "@deck.gl/extensions": "^9.2.11",
+    "@deck.gl/geo-layers": "^9.2.11",
+    "@deck.gl/layers": "^9.2.11",
+    "@deck.gl/mesh-layers": "^9.2.11",
+    "@geoarrow/deck.gl-layers": "^0.3.1",
+    "@geoarrow/geoarrow-wasm": "^0.2.0-beta.5",
+    "apache-arrow": "^21.1.0"
   }
 }
