@@ -1217,8 +1217,6 @@ export async function registerMapPlugin(): Promise<void> {
       const heightColName = columns[3] || null;
       const tooltipColName = columns[4] || null;
 
-      console.log('[map-plugin] slot mapping:', { geomColName, colorColName, sizeColName, heightColName, tooltipColName });
-
       // Find geometry column metadata
       let activeGeomCol = geomMeta.find(g => g.name === geomColName) || null;
       if (!activeGeomCol && geomMeta.length > 0) activeGeomCol = geomMeta[0];
@@ -1248,7 +1246,7 @@ export async function registerMapPlugin(): Promise<void> {
           try {
             geoData = await loadGeoArrowData(geoArrowUrl, activeGeomCol.name);
           } catch (e) {
-            console.warn('[map-plugin] GeoArrow path failed, falling back to WKB:', e);
+            // GeoArrow not available — fall back to WKB parsing
           }
         }
 
