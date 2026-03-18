@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -54,9 +55,16 @@ func NewArrowServer(sp *spool.Spool, introspector *engine.Introspector) (*ArrowS
 	mux.HandleFunc("/introspect", as.handleIntrospect)
 	mux.HandleFunc("/spool/delete", as.handleSpoolDelete)
 
-	// Note: perspective static files are no longer served by the kernel.
-	// VS Code extension bundles them in out/perspective/.
-	// JupyterLab uses its own labextension build.
+	// Serve perspective static files if available.
+	// Look next to the binary: <binary_dir>/static/perspective/
+	if exePath, err := os.Executable(); err == nil {
+		staticDir := filepath.Join(filepath.Dir(exePath), "static", "perspective")
+		if info, err := os.Stat(staticDir); err == nil && info.IsDir() {
+			fs := http.StripPrefix("/static/perspective/", http.FileServer(http.Dir(staticDir)))
+			mux.Handle("/static/perspective/", addCORS(fs))
+			log.Printf("Serving perspective static files from %s", staticDir)
+		}
+	}
 
 	as.server = &http.Server{Handler: mux}
 
@@ -302,7 +310,17 @@ func (as *ArrowServer) BaseURL() string {
 	return fmt.Sprintf("http://127.0.0.1:%d", as.Port())
 }
 
-
+// addCORS wraps an http.Handler to add CORS headers.
+// TODO: CORS Allow-Origin: * is required because the VS Code webview origin is
+// dynamic (vscode-webview://<id>) and unpredictable. The server binds to
+// 127.0.0.1 only, so it is not reachable from the network. Consider restricting
+// to vscode-webview:// origins if a reliable pattern emerges.
+func addCORS(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		h.ServeHTTP(w, r)
+	})
+}
 
 // handleIntrospect serves database introspection metadata as JSON.
 // GET /introspect?type=...&database=...&schema=...&table=...
