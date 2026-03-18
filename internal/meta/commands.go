@@ -126,7 +126,7 @@ func (r *Registry) handleVersion(_ context.Context, _ []string) (string, error) 
 
 	version := "unknown"
 	if reader.Next() {
-		rec := reader.Record()
+		rec := reader.RecordBatch()
 		if rec.NumRows() > 0 && rec.NumCols() > 0 {
 			col, ok := rec.Column(0).(*array.String)
 			if ok {
@@ -176,7 +176,7 @@ func (r *Registry) handleExplain(ctx context.Context, args []string) (*CommandRe
 	// The HTML is in explain_value.
 	var html string
 	if reader.Next() {
-		rec := reader.Record()
+		rec := reader.RecordBatch()
 		if rec.NumRows() > 0 && rec.NumCols() >= 2 {
 			if col, ok := rec.Column(1).(*array.String); ok {
 				html = strings.Clone(col.Value(0))
@@ -215,8 +215,13 @@ func (r *Registry) executeAndRender(ctx context.Context, query string) (string, 
 	}
 	defer reader.Release()
 
-	result, err := engine.BuildPreviewFromReader(reader, 1000, nil)
-	if err != nil {
+	result := &engine.QueryResult{}
+	result.InitFromSchema(reader.Schema())
+	for reader.Next() {
+		rec := reader.RecordBatch()
+		result.AddPreviewRows(rec, 1000)
+	}
+	if err := reader.Err(); err != nil {
 		return "", err
 	}
 

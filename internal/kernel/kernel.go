@@ -31,6 +31,16 @@ func (c *ConnectionInfo) Endpoint(port int) string {
 	return fmt.Sprintf("%s://%s:%d", c.Transport, c.IP, port)
 }
 
+// TileSourceConfig holds a basemap tile source configuration.
+type TileSourceConfig struct {
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	Type        string `json:"type"` // "raster", "vector", "tilejson"
+	Attribution string `json:"attribution,omitempty"`
+	MinZoom     int    `json:"min_zoom,omitempty"`
+	MaxZoom     int    `json:"max_zoom,omitempty"`
+}
+
 // Kernel manages the Jupyter kernel lifecycle and ZMQ sockets.
 type Kernel struct {
 	connInfo     *ConnectionInfo
@@ -38,6 +48,7 @@ type Kernel struct {
 	spool        *spool.Spool
 	arrowServer  *ArrowServer
 	metaRegistry *meta.Registry
+	tileSources  []TileSourceConfig
 	key          []byte
 
 	shellSocket   zmq.Socket
@@ -45,6 +56,8 @@ type Kernel struct {
 	iopubSocket   zmq.Socket
 	stdinSocket   zmq.Socket
 	hbSocket      zmq.Socket
+
+	history *History
 
 	shutdown     chan struct{}
 	shutdownOnce sync.Once
@@ -60,7 +73,13 @@ func NewKernel(connInfo *ConnectionInfo, sess *session.Session, sp *spool.Spool)
 		shutdown: make(chan struct{}),
 	}
 	k.metaRegistry = meta.NewRegistry(sess.Engine, sess.SetPreviewLimit)
+	k.history = NewHistory(sess.ID)
 	return k
+}
+
+// SetTileSources configures basemap tile sources for the map plugin.
+func (k *Kernel) SetTileSources(sources []TileSourceConfig) {
+	k.tileSources = sources
 }
 
 // Start initializes ZMQ sockets and begins the message loop.

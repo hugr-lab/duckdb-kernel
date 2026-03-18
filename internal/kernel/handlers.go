@@ -33,6 +33,14 @@ func (k *Kernel) handleShellMessage(ctx context.Context, msg *Message) {
 		k.handleCompleteRequest(msg)
 	case "inspect_request":
 		k.handleInspectRequest(msg)
+	case "history_request":
+		k.handleHistoryRequest(msg)
+	case "comm_info_request":
+		k.handleCommInfoRequest(msg)
+	case "comm_open":
+		k.handleCommOpen(msg)
+	case "comm_msg":
+		// Silently ignore comm messages — no comms registered.
 	default:
 		log.Printf("unhandled shell message type: %s", msg.Header.MsgType)
 	}
@@ -76,6 +84,11 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 	}
 	if err := k.sendMessage(k.iopubSocket, inputMsg); err != nil {
 		log.Printf("send execute_input error: %v", err)
+	}
+
+	// Record in history
+	if code != "" {
+		k.history.Add(execCount, code)
 	}
 
 	// Empty input — no output
@@ -203,7 +216,7 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 				}
 			}
 
-			data["application/vnd.hugr.result+json"] = map[string]any{
+			resultMeta := map[string]any{
 				"query_id":         result.QueryID,
 				"arrow_url":        k.arrowServer.ArrowURL(result.QueryID, result.TotalRows),
 				"base_url":         k.arrowServer.BaseURL(),
@@ -213,6 +226,44 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 				"query_time_ms":    queryTimeMs,
 				"transfer_time_ms": transferTimeMs,
 			}
+
+			// Add geometry column metadata if any geometry columns detected
+			if len(result.GeometryColumns) > 0 {
+				geoCols := make([]map[string]any, len(result.GeometryColumns))
+				for i, gc := range result.GeometryColumns {
+					geoCols[i] = map[string]any{
+						"name":   gc.Name,
+						"srid":   gc.SRID,
+						"format": gc.Format,
+					}
+				}
+				resultMeta["geometry_columns"] = geoCols
+			}
+
+			// Add tile source configuration if available
+			if len(k.tileSources) > 0 {
+				tiles := make([]map[string]any, len(k.tileSources))
+				for i, ts := range k.tileSources {
+					t := map[string]any{
+						"name": ts.Name,
+						"url":  ts.URL,
+						"type": ts.Type,
+					}
+					if ts.Attribution != "" {
+						t["attribution"] = ts.Attribution
+					}
+					if ts.MinZoom > 0 {
+						t["min_zoom"] = ts.MinZoom
+					}
+					if ts.MaxZoom > 0 {
+						t["max_zoom"] = ts.MaxZoom
+					}
+					tiles[i] = t
+				}
+				resultMeta["tile_sources"] = tiles
+			}
+
+			data["application/vnd.hugr.result+json"] = resultMeta
 		}
 
 		displayMsg := NewMessage(msg, "display_data")
@@ -295,6 +346,43 @@ func (k *Kernel) handleInspectRequest(msg *Message) {
 	}
 	if err := k.sendMessage(k.shellSocket, reply); err != nil {
 		log.Printf("send inspect_reply error: %v", err)
+	}
+}
+
+func (k *Kernel) handleHistoryRequest(msg *Message) {
+	reply := NewMessage(msg, "history_reply")
+	reply.Content = map[string]any{
+		"status":  "ok",
+		"history": k.history.Entries(),
+	}
+	if err := k.sendMessage(k.shellSocket, reply); err != nil {
+		log.Printf("send history_reply error: %v", err)
+	}
+}
+
+func (k *Kernel) handleCommInfoRequest(msg *Message) {
+	reply := NewMessage(msg, "comm_info_reply")
+	reply.Content = map[string]any{
+		"status": "ok",
+		"comms":  map[string]any{},
+	}
+	if err := k.sendMessage(k.shellSocket, reply); err != nil {
+		log.Printf("send comm_info_reply error: %v", err)
+	}
+}
+
+func (k *Kernel) handleCommOpen(msg *Message) {
+	// No comms supported — send comm_close to signal rejection.
+	commID, _ := msg.Content["comm_id"].(string)
+	if commID == "" {
+		return
+	}
+	reply := NewMessage(msg, "comm_close")
+	reply.Content = map[string]any{
+		"comm_id": commID,
+	}
+	if err := k.sendMessage(k.iopubSocket, reply); err != nil {
+		log.Printf("send comm_close error: %v", err)
 	}
 }
 

@@ -44,9 +44,13 @@ func NewSpool(sessionID string) (*Spool, error) {
 
 // StreamWriter writes Arrow record batches to an IPC streaming file.
 // Batches are flushed to disk immediately — no accumulation in memory.
+//
+// The caller is responsible for any transformations (flatten, geoarrow)
+// before calling Write. Use flatten.NewConverter and geoarrow.NewConverter
+// as RecordReader wrappers in the pipeline before writing.
 type StreamWriter struct {
-	w  *ipc.Writer
-	f  *os.File
+	w *ipc.Writer
+	f *os.File
 }
 
 // NewStreamWriter creates a streaming IPC writer for the given query.
@@ -61,7 +65,9 @@ func (s *Spool) NewStreamWriter(queryID string) (*StreamWriter, error) {
 }
 
 // Write writes a single record batch to the IPC stream.
-func (sw *StreamWriter) Write(rec arrow.Record) error {
+// The batch should already be transformed (flattened, geoarrow-converted)
+// by the reader pipeline before calling Write.
+func (sw *StreamWriter) Write(rec arrow.RecordBatch) error {
 	if sw.w == nil {
 		sw.w = ipc.NewWriter(sw.f, ipc.WithSchema(rec.Schema()))
 	}
