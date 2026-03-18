@@ -569,7 +569,7 @@ function buildGeoArrowLayers(
 
   if (isPoint) {
     if (elev) {
-      // Extruded columns for points with height
+      // Extruded columns for points with height — binary elevation attribute
       layers.push(new ColumnLayer({
         id: 'hugr-map-point-columns',
         data: {
@@ -582,11 +582,11 @@ function buildGeoArrowLayers(
         getFillColor: colorAcc || FILL_COLOR,
         getLineColor: STROKE_COLOR,
         diskResolution: 20,
-        radius: sizeAcc ? undefined : 100,
-        getRadius: sizeAcc || 100,
-        radiusUnits: 'meters' as any,
+        radius: 30,
         elevationScale: elev.elevationScale,
         extruded: true,
+        filled: true,
+        flatShading: true,
         opacity: 0.85,
         pickable: true,
       }));
@@ -633,25 +633,18 @@ function buildGeoArrowLayers(
   }
 
   if (isPolygon) {
-    const polyData: any = {
-      length: geoData.numRows,
-      startIndices: geoData.startIndices,
-      attributes: {
-        getPolygon: { value: geoData.flatCoords, size: 2 },
-      },
-    };
-    if (elev) {
-      polyData.attributes.getElevation = { value: elev.elevationArr, size: 1 };
-    }
-
     layers.push(new SolidPolygonLayer({
       id: 'hugr-map-polygons',
-      data: polyData,
+      data: {
+        length: geoData.numRows,
+        startIndices: geoData.startIndices,
+        attributes: {
+          getPolygon: { value: geoData.flatCoords, size: 2 },
+        },
+      },
       _normalize: false,
       getFillColor: colorAcc || FILL_COLOR,
       getLineColor: STROKE_COLOR,
-      elevationScale: elev?.elevationScale || 1,
-      extruded: !!elev,
       opacity: 0.85,
       pickable: true,
       filled: true,
@@ -1223,8 +1216,48 @@ export async function registerMapPlugin(): Promise<void> {
           #map-container canvas { position:absolute; top:0; left:0; }
           #no-geom { display:flex; align-items:center; justify-content:center;
             width:100%; height:100%; color:#888; font:14px sans-serif; }
+          #legend {
+            position:absolute; bottom:8px; left:8px; z-index:5;
+            background: var(--map-element-background, rgba(255,255,255,0.92));
+            color: var(--icon--color, #161616);
+            border: 1px solid var(--inactive--border-color, #dadada);
+            border-radius: 4px;
+            padding: 8px 10px;
+            font: 11px/1.4 sans-serif;
+            max-width: 200px;
+            pointer-events: auto;
+          }
+          #legend .legend-title {
+            font-weight: bold;
+            margin-bottom: 4px;
+            font-size: 12px;
+          }
+          #legend .legend-gradient {
+            height: 12px;
+            border-radius: 2px;
+            margin-bottom: 2px;
+          }
+          #legend .legend-labels {
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            color: var(--inactive--color, #888);
+          }
+          #legend .legend-cat-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin: 2px 0;
+          }
+          #legend .legend-cat-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+          }
         </style>
         <div id="map-container"></div>
+        <div id="legend" style="display:none"></div>
       `;
       this._container = this.shadowRoot!.getElementById('map-container') as HTMLDivElement;
     }
@@ -1317,13 +1350,21 @@ export async function registerMapPlugin(): Promise<void> {
 
       try {
         // Try GeoArrow binary path first (zero-copy to GPU)
-        const geoArrowUrl = arrowUrl ? arrowUrl + (arrowUrl.includes('?') ? '&' : '?') + 'geoarrow=1' : null;
+        // Build GeoArrow URL with column projection — only fetch needed columns
+        let geoArrowUrl: string | null = null;
+        if (arrowUrl) {
+          const neededCols = [geomColName, colorColName, sizeColName, heightColName, ...tooltipColNames]
+            .filter((c): c is string => c != null);
+          const uniqueCols = [...new Set(neededCols)];
+          const params = `geoarrow=1&columns=${encodeURIComponent(uniqueCols.join(','))}`;
+          geoArrowUrl = arrowUrl + (arrowUrl.includes('?') ? '&' : '?') + params;
+        }
         let geoData: GeoArrowData | null = null;
         // GeoArrow binary path: only for WKB/GeoArrow formats (not H3Cell, GeoJSON)
         const useGeoArrow = geoArrowUrl && activeGeomCol.format !== 'H3Cell' && activeGeomCol.format !== 'GeoJSON';
         if (useGeoArrow) {
           try {
-            geoData = await loadGeoArrowData(geoArrowUrl, activeGeomCol.name);
+            geoData = await loadGeoArrowData(geoArrowUrl!, activeGeomCol.name);
           } catch (e) {
             // GeoArrow not available — fall back to WKB parsing
           }
@@ -1352,6 +1393,7 @@ export async function registerMapPlugin(): Promise<void> {
 
           const dataLayers = buildGeoArrowLayers(geoData, colorAcc, sizeAcc, heightColName);
           this._renderDeckLayers(dataLayers);
+          this._updateLegend(colorColName, colorColName ? schema[colorColName] || 'string' : 'string', geoData);
         } else {
           // ── WKB / fallback path ──
           let features: FeatureRow[];
@@ -1390,6 +1432,9 @@ export async function registerMapPlugin(): Promise<void> {
           }
 
           this._renderDeck(colorAcc, sizeAcc, heightAcc);
+          // Hide legend for WKB fallback (no GeoArrow data for legend)
+          const legendEl = this.shadowRoot?.getElementById('legend');
+          if (legendEl) legendEl.style.display = 'none';
         }
       } catch (err) {
         console.error('[map-plugin] draw error:', err);
@@ -1567,6 +1612,58 @@ export async function registerMapPlugin(): Promise<void> {
           this._viewState = viewState;
         },
       });
+    }
+
+    /** Update legend overlay based on current color accessor data. */
+    private _updateLegend(colorColName: string | null, colType: string, geoData: GeoArrowData | null) {
+      const legend = this.shadowRoot?.getElementById('legend');
+      if (!legend) return;
+
+      if (!colorColName || !geoData) {
+        legend.style.display = 'none';
+        return;
+      }
+
+      const colIdx = geoData.table.schema.fields.findIndex((f: any) => f.name === colorColName);
+      if (colIdx === -1) { legend.style.display = 'none'; return; }
+      const values = geoData.table.propColData?.get(colIdx);
+      if (!values || values.length === 0) { legend.style.display = 'none'; return; }
+
+      legend.style.display = '';
+
+      if (colType === 'string' || colType === 'boolean') {
+        // Categorical legend
+        const counts = new Map<string, number>();
+        for (const v of values) {
+          const s = String(v ?? '');
+          counts.set(s, (counts.get(s) || 0) + 1);
+        }
+        const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+        const items = sorted.map(([val, count], i) => {
+          const c = CATEGORY_COLORS[i % CATEGORY_COLORS.length];
+          return `<div class="legend-cat-item"><span class="legend-cat-dot" style="background:rgb(${c[0]},${c[1]},${c[2]})"></span>${val} <span style="color:var(--inactive--color,#888)">(${count.toLocaleString()})</span></div>`;
+        }).join('');
+        legend.innerHTML = `<div class="legend-title">${colorColName}</div>${items}`;
+      } else {
+        // Numeric gradient legend
+        let min = Infinity, max = -Infinity;
+        for (const v of values) {
+          const n = Number(v);
+          if (isFinite(n)) { if (n < min) min = n; if (n > max) max = n; }
+        }
+        if (!isFinite(min)) { legend.style.display = 'none'; return; }
+        // Build gradient from colorScale function
+        const stops: string[] = [];
+        for (let t = 0; t <= 1; t += 0.1) {
+          const c = colorScale(t);
+          stops.push(`rgb(${c[0]},${c[1]},${c[2]})`);
+        }
+        legend.innerHTML = `
+          <div class="legend-title">${colorColName}</div>
+          <div class="legend-gradient" style="background:linear-gradient(to right,${stops.join(',')})"></div>
+          <div class="legend-labels"><span>${min.toLocaleString()}</span><span>${max.toLocaleString()}</span></div>
+        `;
+      }
     }
 
     /** Inject icon + hide-UI styles into the parent perspective-viewer shadow DOM. */

@@ -141,6 +141,18 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 
 	wantGeoArrow := r.URL.Query().Get("geoarrow") == "1"
 
+	// Column projection: only include requested columns in output
+	var projCols map[string]bool
+	if cols := r.URL.Query().Get("columns"); cols != "" {
+		projCols = make(map[string]bool)
+		for _, c := range strings.Split(cols, ",") {
+			c = strings.TrimSpace(c)
+			if c != "" {
+				projCols[c] = true
+			}
+		}
+	}
+
 	reader, closer, err := as.spool.OpenReader(queryID)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -186,6 +198,19 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 			sliced = true
 			rows = need
 			last = true
+		}
+
+		// Apply column projection if requested
+		if projCols != nil {
+			projected := projectColumns(writeRec, projCols)
+			if projected != nil {
+				if sliced {
+					writeRec.Release()
+					sliced = false
+				}
+				writeRec = projected
+				defer projected.Release()
+			}
 		}
 
 		if outSchema == nil {
@@ -234,6 +259,32 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 	if canFlush {
 		flusher.Flush()
 	}
+}
+
+// projectColumns returns a new RecordBatch with only the requested columns.
+// Returns nil if no projection needed (all columns requested).
+func projectColumns(rec arrow.RecordBatch, cols map[string]bool) arrow.RecordBatch {
+	schema := rec.Schema()
+	var indices []int
+	for i, f := range schema.Fields() {
+		if cols[f.Name] {
+			indices = append(indices, i)
+		}
+	}
+	if len(indices) == len(schema.Fields()) || len(indices) == 0 {
+		return nil // no projection needed
+	}
+
+	fields := make([]arrow.Field, len(indices))
+	arrays := make([]arrow.Array, len(indices))
+	for i, idx := range indices {
+		fields[i] = schema.Field(idx)
+		arrays[i] = rec.Column(idx)
+	}
+
+	meta := schema.Metadata()
+	newSchema := arrow.NewSchema(fields, &meta)
+	return array.NewRecordBatch(newSchema, arrays, rec.NumRows())
 }
 
 // streamRawFile sends the Arrow IPC file directly without parsing.
