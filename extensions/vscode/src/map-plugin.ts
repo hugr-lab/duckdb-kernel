@@ -1105,8 +1105,31 @@ export async function registerMapPlugin(): Promise<void> {
   `;
   document.head.appendChild(iconStyle);
 
-  // Note: icon + hide-UI styles are injected from the plugin's draw() method
-  // via _injectViewerStyles(), which has access to the parent viewer element.
+  // Icon CSS variable on host — always available (inherits into all shadow DOMs).
+  // Hide-UI styles are injected from draw() via _injectViewerStyles().
+  //
+  // Also inject icon mask-image rule into any viewer shadow DOM we can find.
+  // This handles the case where Datagrid is active (our draw() not called).
+  const iconRule = `.plugin-select-item[data-plugin="Geo Map"]:before { -webkit-mask-image: var(--plugin-selector-geo-map--content); mask-image: var(--plugin-selector-geo-map--content); }`;
+  const injectIcon = (viewer: Element) => {
+    const sr = viewer.shadowRoot;
+    if (!sr || sr.querySelector('#geo-map-icon')) return;
+    const s = document.createElement('style');
+    s.id = 'geo-map-icon';
+    s.textContent = iconRule;
+    sr.appendChild(s);
+  };
+  document.querySelectorAll('perspective-viewer').forEach(injectIcon);
+  new MutationObserver((mutations) => {
+    for (const m of mutations) {
+      for (const n of m.addedNodes) {
+        if (n instanceof Element) {
+          if (n.tagName === 'PERSPECTIVE-VIEWER') injectIcon(n);
+          n.querySelectorAll?.('perspective-viewer').forEach(injectIcon);
+        }
+      }
+    }
+  }).observe(document.body, { childList: true, subtree: true });
 
   customElements.define('perspective-viewer-map', class extends HTMLElement {
     private _deck: any = null;
@@ -1116,7 +1139,7 @@ export async function registerMapPlugin(): Promise<void> {
     private _viewState: MapViewState = { longitude: 0, latitude: 0, zoom: 2, pitch: 0, bearing: 0 };
     private _tileSources: TileSourceMeta[] = [];
     private _geoData: GeoArrowData | null = null;
-    private _tooltipColName: string | null = null;
+    private _tooltipColNames: string[] = [];
 
     // --- Plugin identity ---
     get name() { return 'Geo Map'; }
@@ -1209,12 +1232,13 @@ export async function registerMapPlugin(): Promise<void> {
         return;
       }
 
-      // Slots: [0]=Geometry, [1]=Color, [2]=Size, [3]=Height, [4]=Tooltip
+      // Slots: [0]=Geometry, [1]=Color, [2]=Size, [3]=Height, [4+]=Tooltip (multiple)
       const geomColName = columns[0] || null;
       const colorColName = columns[1] || null;
       const sizeColName = columns[2] || null;
       const heightColName = columns[3] || null;
-      const tooltipColName = columns[4] || null;
+      // All columns from index 4 onwards are tooltip columns
+      const tooltipColNames = columns.slice(4).filter((c): c is string => c != null);
 
       // Find geometry column metadata
       let activeGeomCol = geomMeta.find(g => g.name === geomColName) || null;
@@ -1268,7 +1292,7 @@ export async function registerMapPlugin(): Promise<void> {
           }
 
           this._geoData = geoData;
-          this._tooltipColName = tooltipColName;
+          this._tooltipColNames = tooltipColNames;
 
           const dataLayers = buildGeoArrowLayers(geoData, colorAcc, sizeAcc, heightAcc);
           this._renderDeckLayers(dataLayers);
@@ -1296,8 +1320,8 @@ export async function registerMapPlugin(): Promise<void> {
             ? buildSizeAccessor(features, heightColName, 0, 50000)
             : null;
 
-          if (tooltipColName) {
-            for (const f of features) f.properties.__tooltipColumn = tooltipColName;
+          if (tooltipColNames.length > 0) {
+            for (const f of features) f.properties.__tooltipColumns = tooltipColNames;
           }
 
           const isFirstDraw = this._deck === null;
@@ -1541,31 +1565,29 @@ export async function registerMapPlugin(): Promise<void> {
       ` : '';
     }
 
-    /** Format tooltip HTML from GeoArrow propColData by row index. */
+    /** Format tooltip HTML from GeoArrow propColData by row index.
+     *  Only shows columns assigned to Tooltip slot(s). No tooltip slots = no tooltip. */
     private _formatGeoArrowTooltip(index: number): string | null {
       const gd = this._geoData;
       if (!gd || index < 0 || index >= gd.numRows) return null;
+      if (this._tooltipColNames.length === 0) return null;
 
       const schema = gd.table.schema;
       const propColData = gd.table.propColData;
+      const tooltipSet = new Set(this._tooltipColNames);
       const parts: string[] = [];
-      let title = '';
 
       for (const [colIdx, values] of propColData) {
         const name = schema.fields[colIdx].name;
+        if (!tooltipSet.has(name)) continue;
         const val = values[index];
         if (val === null || val === undefined) continue;
-
-        if (this._tooltipColName && name === this._tooltipColName) {
-          title = `<div style="font-weight:bold;margin-bottom:4px;font-size:13px">${String(val)}</div>`;
-        } else {
-          parts.push(`<b>${name}</b>: ${val}`);
-        }
+        parts.push(`<b>${name}</b>: ${val}`);
       }
 
-      if (!title && parts.length === 0) return null;
-      const body = parts.length > 0 ? `<div style="font-size:11px">${parts.join('<br/>')}</div>` : '';
-      return title + body;
+      return parts.length > 0
+        ? `<div style="font-size:12px;line-height:1.5">${parts.join('<br/>')}</div>`
+        : null;
     }
 
     async update(view: any) { await this.draw(view); }
