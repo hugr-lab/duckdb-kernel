@@ -249,6 +249,11 @@
     "vscode:prepublish": "node build.mjs"
   },
   "devDependencies": {
+    "@perspective-dev/client": "^4.3.0",
+    "@perspective-dev/server": "^4.3.0",
+    "@perspective-dev/viewer": "^4.3.0",
+    "@perspective-dev/viewer-d3fc": "^4.3.0",
+    "@perspective-dev/viewer-datagrid": "^4.3.0",
     "@types/vscode": "^1.80.0",
     "@types/vscode-notebook-renderer": "^1.72.0",
     "esbuild": "^0.27.4",

@@ -177,13 +177,22 @@ async function streamArrowToTable(
 let _perspectiveReady: Promise<any> | null = null;
 let _perspectiveBaseUrl: string | null = null;
 
+/** Resolve the base URL for perspective static files from extension assets. */
+function resolvePerspectiveBase(): string {
+  // renderer.js is loaded from extension's out/ directory.
+  // Perspective assets are in out/perspective/ (sibling directory).
+  const rendererUrl = new URL(import.meta.url);
+  return new URL('./perspective', rendererUrl).href;
+}
+
 function loadPerspective(baseUrl: string): Promise<any> {
   if (_perspectiveReady && _perspectiveBaseUrl === baseUrl) {
     return _perspectiveReady;
   }
   _perspectiveBaseUrl = baseUrl;
-  const staticBase = `${baseUrl}/static/perspective`;
   _perspectiveReady = (async () => {
+    const staticBase = resolvePerspectiveBase();
+
     let perspective: any;
     const alreadyLoaded = customElements.get('perspective-viewer') !== undefined;
     if (alreadyLoaded) {
@@ -207,9 +216,7 @@ function loadPerspective(baseUrl: string): Promise<any> {
           style.textContent = cssText;
           document.head.appendChild(style);
         }
-      } catch {
-        // Theme CSS failed to load — viewer works without it.
-      }
+      } catch {}
     }
     await customElements.whenDefined('perspective-viewer');
     await registerMapPlugin();
