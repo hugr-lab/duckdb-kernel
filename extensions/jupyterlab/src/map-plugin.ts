@@ -654,8 +654,14 @@ function buildGeoArrowLayers(
   return layers;
 }
 
+/** Color scale mode. */
+type ColorScaleMode = 'quantize' | 'quantile' | 'log' | 'category' | 'identity';
+
+/** Current color scale mode (will be configurable via settings panel). */
+let currentColorScale: ColorScaleMode = 'quantize';
+
 /** Build a color accessor for binary data format (index-based).
- *  Works with merged table from loadGeoArrowData. */
+ *  Supports multiple scale modes: quantize, quantile, log, category, identity. */
 function buildBinaryColorAccessor(
   table: any, colName: string, colType: string, geomColIdx: number,
 ): ((obj: any, info: { index: number }) => [number, number, number, number]) | null {
@@ -663,30 +669,79 @@ function buildBinaryColorAccessor(
   const colIdx = table.schema.fields.findIndex((f: any) => f.name === colName);
   if (colIdx === -1) return null;
   const values: any[] = table.propColData?.get(colIdx);
-  if (!values) return null;
+  if (!values || values.length === 0) return null;
 
-  if (colType === 'string' || colType === 'boolean') {
-    const valMap = new Map<string, number>();
-    for (const v of values) {
-      const s = String(v ?? '');
-      if (!valMap.has(s)) valMap.set(s, valMap.size);
+  // Auto-detect scale: string → category, number → currentColorScale
+  const mode: ColorScaleMode = (colType === 'string' || colType === 'boolean')
+    ? 'category' : currentColorScale;
+
+  switch (mode) {
+    case 'category': {
+      const valMap = new Map<string, number>();
+      for (const v of values) {
+        const s = String(v ?? '');
+        if (!valMap.has(s)) valMap.set(s, valMap.size);
+      }
+      return (_obj: any, info: { index: number }) => {
+        const s = String(values[info.index] ?? '');
+        const idx = valMap.get(s) ?? 0;
+        return CATEGORY_COLORS[idx % CATEGORY_COLORS.length];
+      };
     }
-    return (_obj: any, info: { index: number }) => {
-      const s = String(values[info.index] ?? '');
-      const idx = valMap.get(s) ?? 0;
-      return CATEGORY_COLORS[idx % CATEGORY_COLORS.length];
-    };
-  } else {
-    let min = Infinity, max = -Infinity;
-    for (const v of values) {
-      const n = Number(v);
-      if (isFinite(n)) { if (n < min) min = n; if (n > max) max = n; }
+
+    case 'identity': {
+      // CSS color values from field
+      return (_obj: any, info: { index: number }) => {
+        const c = parseCssColor(String(values[info.index] ?? ''));
+        return c || FILL_COLOR;
+      };
     }
-    const range = max - min || 1;
-    return (_obj: any, info: { index: number }) => {
-      const v = Number(values[info.index]);
-      return isFinite(v) ? colorScale((v - min) / range) : FILL_COLOR;
-    };
+
+    case 'quantile': {
+      // Sort values to get quantile breaks
+      const nums = values.map(Number).filter(isFinite).sort((a, b) => a - b);
+      if (nums.length === 0) return null;
+      return (_obj: any, info: { index: number }) => {
+        const v = Number(values[info.index]);
+        if (!isFinite(v)) return FILL_COLOR;
+        // Binary search for quantile position
+        let lo = 0, hi = nums.length - 1;
+        while (lo < hi) { const mid = (lo + hi) >> 1; nums[mid] < v ? lo = mid + 1 : hi = mid; }
+        return paletteColor(lo / (nums.length - 1 || 1));
+      };
+    }
+
+    case 'log': {
+      // Logarithmic scale
+      let min = Infinity, max = -Infinity;
+      for (const v of values) {
+        const n = Number(v);
+        if (isFinite(n) && n > 0) { if (n < min) min = n; if (n > max) max = n; }
+      }
+      if (!isFinite(min)) return null;
+      const logMin = Math.log(min), logRange = Math.log(max) - logMin || 1;
+      return (_obj: any, info: { index: number }) => {
+        const v = Number(values[info.index]);
+        if (!isFinite(v) || v <= 0) return FILL_COLOR;
+        return paletteColor((Math.log(v) - logMin) / logRange);
+      };
+    }
+
+    case 'quantize':
+    default: {
+      // Equal-interval (linear)
+      let min = Infinity, max = -Infinity;
+      for (const v of values) {
+        const n = Number(v);
+        if (isFinite(n)) { if (n < min) min = n; if (n > max) max = n; }
+      }
+      if (!isFinite(min)) return null;
+      const range = max - min || 1;
+      return (_obj: any, info: { index: number }) => {
+        const v = Number(values[info.index]);
+        return isFinite(v) ? paletteColor((v - min) / range) : FILL_COLOR;
+      };
+    }
   }
 }
 
@@ -747,13 +802,72 @@ const DEFAULT_STYLE: MapStyle = {
   pointRadius: 5,
 };
 
-/** Blue-to-red gradient for data-driven color mapping. */
+/** Parse a CSS color string to RGBA. Returns null if not a color. */
+function parseCssColor(s: string): [number, number, number, number] | null {
+  if (!s || typeof s !== 'string') return null;
+  const t = s.trim().toLowerCase();
+  const hexMatch = t.match(/^#([0-9a-f]{3,8})$/);
+  if (hexMatch) {
+    const h = hexMatch[1];
+    if (h.length === 3) return [parseInt(h[0]+h[0],16), parseInt(h[1]+h[1],16), parseInt(h[2]+h[2],16), 255];
+    if (h.length === 6) return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16), 255];
+    if (h.length === 8) return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16), parseInt(h.slice(6,8),16)];
+  }
+  const rgbMatch = t.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)$/);
+  if (rgbMatch) {
+    const a = rgbMatch[4] !== undefined ? Math.round(parseFloat(rgbMatch[4]) * 255) : 255;
+    return [+rgbMatch[1], +rgbMatch[2], +rgbMatch[3], a];
+  }
+  const NAMED: Record<string, [number, number, number, number]> = {
+    red: [255,0,0,255], green: [0,128,0,255], blue: [0,0,255,255],
+    white: [255,255,255,255], black: [0,0,0,255], yellow: [255,255,0,255],
+    cyan: [0,255,255,255], magenta: [255,0,255,255], orange: [255,165,0,255],
+    purple: [128,0,128,255], gray: [128,128,128,255], grey: [128,128,128,255],
+  };
+  return NAMED[t] || null;
+}
+
+// ────────────────────── Color Palettes ──────────────────────
+// Each palette is an array of [R,G,B] stops. Interpolated for continuous scales.
+
+type RGB = [number, number, number];
+
+const PALETTES: Record<string, RGB[]> = {
+  // Sequential
+  viridis: [[68,1,84],[72,35,116],[64,67,135],[52,94,141],[41,120,142],[32,144,140],[34,167,132],[68,190,112],[121,209,81],[189,222,38],[253,231,37]],
+  plasma: [[13,8,135],[75,3,161],[126,3,167],[168,34,150],[199,72,121],[222,108,89],[238,145,62],[249,184,41],[251,224,37],[240,249,33]],
+  blues: [[247,251,255],[222,235,247],[198,219,239],[158,202,225],[107,174,214],[66,146,198],[33,113,181],[8,81,156],[8,48,107]],
+  reds: [[255,245,240],[254,224,210],[252,187,161],[252,146,114],[251,106,74],[239,59,44],[203,24,29],[165,15,21],[103,0,13]],
+  ylOrRd: [[255,255,204],[255,237,160],[254,217,118],[254,178,76],[253,141,60],[252,78,42],[227,26,28],[189,0,38],[128,0,38]],
+  greens: [[247,252,245],[229,245,224],[199,233,192],[161,217,155],[116,196,118],[65,171,93],[35,139,69],[0,109,44],[0,68,27]],
+
+  // Diverging
+  rdBu: [[103,0,31],[178,24,43],[214,96,77],[244,165,130],[253,219,199],[247,247,247],[209,229,240],[146,197,222],[67,147,195],[33,102,172],[5,48,97]],
+  rdYlGn: [[165,0,38],[215,48,39],[244,109,67],[253,174,97],[254,224,139],[255,255,191],[217,239,139],[166,217,106],[102,189,99],[26,152,80],[0,104,55]],
+};
+
+/** Default palette name. */
+let currentPalette = 'viridis';
+
+/** Interpolate a color from palette at position t (0-1). */
+function paletteColor(t: number, paletteName: string = currentPalette): [number, number, number, number] {
+  const stops = PALETTES[paletteName] || PALETTES.viridis;
+  t = Math.max(0, Math.min(1, t));
+  const idx = t * (stops.length - 1);
+  const lo = Math.floor(idx);
+  const hi = Math.min(lo + 1, stops.length - 1);
+  const f = idx - lo;
+  return [
+    Math.round(stops[lo][0] + (stops[hi][0] - stops[lo][0]) * f),
+    Math.round(stops[lo][1] + (stops[hi][1] - stops[lo][1]) * f),
+    Math.round(stops[lo][2] + (stops[hi][2] - stops[lo][2]) * f),
+    200,
+  ];
+}
+
+/** Legacy colorScale — now delegates to palette. */
 function colorScale(t: number): [number, number, number, number] {
-  // t in [0,1] → blue(0) → cyan → green → yellow → red(1)
-  const r = Math.round(Math.min(255, Math.max(0, t < 0.5 ? t * 2 * 255 : 255)));
-  const g = Math.round(Math.min(255, Math.max(0, t < 0.5 ? 255 : (1 - t) * 2 * 255)));
-  const b = Math.round(Math.min(255, Math.max(0, t < 0.5 ? (1 - t * 2) * 255 : 0)));
-  return [r, g, b, 200];
+  return paletteColor(t);
 }
 
 /** Compute min/max for a numeric property across features. */
@@ -1652,10 +1766,10 @@ export async function registerMapPlugin(): Promise<void> {
           if (isFinite(n)) { if (n < min) min = n; if (n > max) max = n; }
         }
         if (!isFinite(min)) { legend.style.display = 'none'; return; }
-        // Build gradient from colorScale function
+        // Build gradient from current palette
         const stops: string[] = [];
-        for (let t = 0; t <= 1; t += 0.1) {
-          const c = colorScale(t);
+        for (let t = 0; t <= 1; t += 0.05) {
+          const c = paletteColor(t);
           stops.push(`rgb(${c[0]},${c[1]},${c[2]})`);
         }
         legend.innerHTML = `
