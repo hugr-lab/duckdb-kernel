@@ -141,6 +141,18 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 
 	wantGeoArrow := r.URL.Query().Get("geoarrow") == "1"
 
+	// Column projection: only include requested columns in output
+	var projCols map[string]bool
+	if cols := r.URL.Query().Get("columns"); cols != "" {
+		projCols = make(map[string]bool)
+		for _, c := range strings.Split(cols, ",") {
+			c = strings.TrimSpace(c)
+			if c != "" {
+				projCols[c] = true
+			}
+		}
+	}
+
 	reader, closer, err := as.spool.OpenReader(queryID)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -153,11 +165,18 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 	defer closer.Close()
 	defer reader.Release()
 
-	// For Perspective: wrap reader to replace geometry columns with string "{geometry}".
-	// For deck.gl (?geoarrow=1): serve as-is.
+	// Build reader pipeline:
+	// 1. Column projection (if requested)
+	// 2. String replacement for Perspective (if not geoarrow mode)
 	var source array.RecordReader = reader
+	if projCols != nil {
+		source = geoarrow.NewProjector(source, projCols)
+		if source != reader {
+			defer source.(interface{ Release() }).Release()
+		}
+	}
 	if !wantGeoArrow {
-		replacer := geoarrow.NewStringReplacer(reader)
+		replacer := geoarrow.NewStringReplacer(source)
 		defer replacer.Release()
 		source = replacer
 	}
