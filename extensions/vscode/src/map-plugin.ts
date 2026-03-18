@@ -748,7 +748,12 @@ function buildBinaryColorAccessor(
   }
 }
 
-/** Build a float accessor for binary data (index-based). */
+/** Size scale mode. */
+type SizeScaleMode = 'linear' | 'sqrt' | 'log' | 'identity';
+let currentSizeScale: SizeScaleMode = 'linear';
+let currentSizeRange: [number, number] = [2, 30];
+
+/** Build a float accessor for binary data (index-based) with scale. */
 function buildBinaryFloatAccessor(
   table: any, colName: string,
 ): ((obj: any, info: { index: number }) => number) | null {
@@ -756,11 +761,51 @@ function buildBinaryFloatAccessor(
   const colIdx = table.schema.fields.findIndex((f: any) => f.name === colName);
   if (colIdx === -1) return null;
   const values: any[] = table.propColData?.get(colIdx);
-  if (!values) return null;
-  return (_obj: any, info: { index: number }) => {
-    const v = Number(values[info.index]);
-    return isFinite(v) ? Math.max(0, v) : 0;
-  };
+  if (!values || values.length === 0) return null;
+
+  if (currentSizeScale === 'identity') {
+    return (_obj: any, info: { index: number }) => {
+      const v = Number(values[info.index]);
+      return isFinite(v) ? Math.max(0, v) : 0;
+    };
+  }
+
+  // Compute data range
+  let dataMin = Infinity, dataMax = -Infinity;
+  for (const v of values) {
+    const n = Number(v);
+    if (isFinite(n) && n > 0) { if (n < dataMin) dataMin = n; if (n > dataMax) dataMax = n; }
+  }
+  if (!isFinite(dataMin)) return null;
+
+  const [sMin, sMax] = currentSizeRange;
+
+  switch (currentSizeScale) {
+    case 'sqrt': {
+      const sqrtMin = Math.sqrt(dataMin), sqrtRange = Math.sqrt(dataMax) - sqrtMin || 1;
+      return (_obj: any, info: { index: number }) => {
+        const v = Number(values[info.index]);
+        if (!isFinite(v) || v <= 0) return sMin;
+        return sMin + ((Math.sqrt(v) - sqrtMin) / sqrtRange) * (sMax - sMin);
+      };
+    }
+    case 'log': {
+      const logMin = Math.log(dataMin), logRange = Math.log(dataMax) - logMin || 1;
+      return (_obj: any, info: { index: number }) => {
+        const v = Number(values[info.index]);
+        if (!isFinite(v) || v <= 0) return sMin;
+        return sMin + ((Math.log(v) - logMin) / logRange) * (sMax - sMin);
+      };
+    }
+    default: { // linear
+      const dataRange = dataMax - dataMin || 1;
+      return (_obj: any, info: { index: number }) => {
+        const v = Number(values[info.index]);
+        if (!isFinite(v)) return sMin;
+        return sMin + ((v - dataMin) / dataRange) * (sMax - sMin);
+      };
+    }
+  }
 }
 
 /** Compute initial view state that fits all features. */
@@ -1460,6 +1505,17 @@ export async function registerMapPlugin(): Promise<void> {
               <option value="rdYlGn">RdYlGn</option>
             </select></label>
           </div>
+          <div class="sp-section" id="sp-size">
+            <div class="sp-title">Size / Width</div>
+            <label>Scale <select id="sp-size-scale">
+              <option value="linear">Linear</option>
+              <option value="sqrt">Sqrt</option>
+              <option value="log">Log</option>
+              <option value="identity">Identity</option>
+            </select></label>
+            <label>Min <input type="range" id="sp-size-min" min="1" max="20" value="2"></label>
+            <label>Max <input type="range" id="sp-size-max" min="5" max="100" value="30"></label>
+          </div>
           <div class="sp-section" id="sp-opacity">
             <div class="sp-title">Appearance</div>
             <label>Opacity <input type="range" id="sp-opacity-slider" min="0" max="100" value="85"></label>
@@ -1487,6 +1543,18 @@ export async function registerMapPlugin(): Promise<void> {
       });
       this.shadowRoot!.getElementById('sp-palette')!.addEventListener('change', (e) => {
         currentPalette = (e.target as HTMLSelectElement).value;
+        redraw();
+      });
+      this.shadowRoot!.getElementById('sp-size-scale')!.addEventListener('change', (e) => {
+        currentSizeScale = (e.target as HTMLSelectElement).value as SizeScaleMode;
+        redraw();
+      });
+      this.shadowRoot!.getElementById('sp-size-min')!.addEventListener('input', (e) => {
+        currentSizeRange[0] = Number((e.target as HTMLInputElement).value);
+        redraw();
+      });
+      this.shadowRoot!.getElementById('sp-size-max')!.addEventListener('input', (e) => {
+        currentSizeRange[1] = Number((e.target as HTMLInputElement).value);
         redraw();
       });
       this.shadowRoot!.getElementById('sp-opacity-slider')!.addEventListener('input', (e) => {
@@ -1594,7 +1662,8 @@ export async function registerMapPlugin(): Promise<void> {
           const neededCols = [geomColName, colorColName, sizeColName, heightColName, ...tooltipColNames]
             .filter((c): c is string => c != null);
           const uniqueCols = [...new Set(neededCols)];
-          const params = `geoarrow=1&columns=${encodeURIComponent(uniqueCols.join(','))}`;
+          // TODO: column projection disabled temporarily — nested GeoArrow types may break with projectColumns
+          const params = `geoarrow=1`;
           geoArrowUrl = arrowUrl + (arrowUrl.includes('?') ? '&' : '?') + params;
         }
         let geoData: GeoArrowData | null = null;
@@ -2004,9 +2073,42 @@ export async function registerMapPlugin(): Promise<void> {
         this._deck.setProps({ layers: [...basemapLayers, ...dataLayers] });
       }
     }
-    save() { return { viewState: this._viewState }; }
+    save() {
+      return {
+        viewState: this._viewState,
+        colorScale: currentColorScale,
+        palette: currentPalette,
+        opacity: currentOpacity,
+        basemap: currentBasemapMode,
+        sizeScale: currentSizeScale,
+        sizeRange: currentSizeRange,
+      };
+    }
     async restore(config: any) {
-      if (config?.viewState) this._viewState = config.viewState;
+      if (!config) return;
+      if (config.viewState) this._viewState = config.viewState;
+      if (config.colorScale) currentColorScale = config.colorScale;
+      if (config.palette) currentPalette = config.palette;
+      if (config.opacity != null) currentOpacity = config.opacity;
+      if (config.basemap) currentBasemapMode = config.basemap;
+      if (config.sizeScale) currentSizeScale = config.sizeScale;
+      if (config.sizeRange) currentSizeRange = config.sizeRange;
+
+      // Sync UI controls
+      const sr = this.shadowRoot;
+      if (sr) {
+        const setVal = (id: string, val: string) => {
+          const el = sr.getElementById(id) as HTMLSelectElement | HTMLInputElement | null;
+          if (el) el.value = val;
+        };
+        setVal('sp-color-scale', currentColorScale);
+        setVal('sp-palette', currentPalette);
+        setVal('sp-opacity-slider', String(Math.round(currentOpacity * 100)));
+        setVal('sp-basemap', currentBasemapMode);
+        setVal('sp-size-scale', currentSizeScale);
+        setVal('sp-size-min', String(currentSizeRange[0]));
+        setVal('sp-size-max', String(currentSizeRange[1]));
+      }
     }
     delete() { this.clear(); }
   });
