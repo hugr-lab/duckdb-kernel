@@ -565,6 +565,16 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
     if (this._lazyRender) {
       void this._lazyRender(activeIdx);
     }
+    // Notify perspective viewers in the active panel to recalculate layout
+    const activePanel = panels[activeIdx];
+    if (activePanel) {
+      requestAnimationFrame(() => {
+        const viewers = activePanel.querySelectorAll('perspective-viewer');
+        for (const v of viewers) {
+          (v as any).notifyResize?.();
+        }
+      });
+    }
   }
 
   private _partIcon(part: PartDef): string {
@@ -714,7 +724,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
         viewer.setAttribute('data-tile-sources', JSON.stringify(tileSources));
       }
       if (part.arrow_url) {
-        viewer.setAttribute('data-arrow-url', part.arrow_url);
+        viewer.setAttribute('data-arrow-url', rebuildArrowUrl(part.arrow_url));
       }
 
       this._arrowParts.push({ viewer, table, client, abortController });
@@ -1035,7 +1045,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
         viewer.setAttribute('data-tile-sources', JSON.stringify(tileSources));
       }
       if (metadata.arrow_url) {
-        viewer.setAttribute('data-arrow-url', metadata.arrow_url);
+        viewer.setAttribute('data-arrow-url', rebuildArrowUrl(metadata.arrow_url));
       }
 
       this._arrowParts.push({ viewer, table, client, abortController });
