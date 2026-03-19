@@ -32,10 +32,15 @@ type Config struct {
 // Flat directory structure — no session nesting.
 // Files are named {queryID}.arrow.
 // TTL-based cleanup + disk size limit.
+//
+// Supports two directories:
+//   - Dir (volatile): /tmp/duckdb-kernel/ — TTL cleanup, auto-managed
+//   - PersistentDir (optional): .duckdb-results/ — user-pinned results, no TTL
 type Spool struct {
-	Dir     string
-	TTL     time.Duration
-	MaxSize int64
+	Dir           string
+	PersistentDir string // optional, set via config or Pin()
+	TTL           time.Duration
+	MaxSize       int64
 }
 
 // NewSpool creates a spool with the given config.
@@ -120,7 +125,22 @@ func (sw *StreamWriter) Close() error {
 }
 
 // OpenReader opens a streaming IPC reader for the given query.
+// Checks persistent dir first (pinned results), then volatile dir.
 func (s *Spool) OpenReader(queryID string) (*ipc.Reader, io.Closer, error) {
+	// Try persistent dir first
+	if s.PersistentDir != "" {
+		path := filepath.Join(s.PersistentDir, filepath.Base(queryID)+".arrow")
+		if f, err := os.Open(path); err == nil {
+			r, err := ipc.NewReader(f)
+			if err != nil {
+				f.Close()
+			} else {
+				return r, f, nil
+			}
+		}
+	}
+
+	// Volatile dir
 	path := s.Path(queryID)
 	f, err := os.Open(path)
 	if err != nil {
@@ -145,9 +165,101 @@ func (s *Spool) Exists(queryID string) bool {
 	return err == nil
 }
 
-// Remove deletes a single spool file by query ID.
+// Remove deletes a single spool file by query ID (from both dirs).
 func (s *Spool) Remove(queryID string) error {
-	return os.Remove(s.Path(queryID))
+	os.Remove(s.Path(queryID))
+	if s.PersistentDir != "" {
+		os.Remove(filepath.Join(s.PersistentDir, filepath.Base(queryID)+".arrow"))
+	}
+	return nil
+}
+
+// Pin copies an Arrow file from volatile dir to persistent dir.
+// Creates persistent dir and .gitignore if needed.
+func (s *Spool) Pin(queryID string) error {
+	if s.PersistentDir == "" {
+		return fmt.Errorf("persistent dir not configured")
+	}
+	src := s.Path(queryID)
+	if _, err := os.Stat(src); err != nil {
+		return fmt.Errorf("source file not found: %w", err)
+	}
+
+	// Create persistent dir
+	if err := os.MkdirAll(s.PersistentDir, 0o755); err != nil {
+		return fmt.Errorf("create persistent dir: %w", err)
+	}
+
+	// Create .gitignore if it doesn't exist
+	gitignorePath := filepath.Join(s.PersistentDir, ".gitignore")
+	if _, err := os.Stat(gitignorePath); os.IsNotExist(err) {
+		os.WriteFile(gitignorePath, []byte("# DuckDB query results\n*.arrow\n"), 0o644)
+	}
+
+	// Copy file
+	dst := filepath.Join(s.PersistentDir, filepath.Base(queryID)+".arrow")
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		os.Remove(dst)
+		return err
+	}
+
+	// Remove from volatile dir — persistent copy is the source of truth now
+	os.Remove(src)
+	return nil
+}
+
+// Unpin moves an Arrow file from persistent dir back to volatile dir.
+func (s *Spool) Unpin(queryID string) error {
+	if s.PersistentDir == "" {
+		return fmt.Errorf("persistent dir not configured")
+	}
+	src := filepath.Join(s.PersistentDir, filepath.Base(queryID)+".arrow")
+	if _, err := os.Stat(src); err != nil {
+		return fmt.Errorf("pinned file not found: %w", err)
+	}
+
+	// Copy back to volatile
+	dst := s.Path(queryID)
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		os.Remove(dst)
+		return err
+	}
+
+	os.Remove(src)
+	return nil
+}
+
+// IsPinned checks if a query result is in the persistent dir.
+func (s *Spool) IsPinned(queryID string) bool {
+	if s.PersistentDir == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(s.PersistentDir, filepath.Base(queryID)+".arrow"))
+	return err == nil
 }
 
 // ListFiles returns all .arrow file names (without extension) in the spool dir.

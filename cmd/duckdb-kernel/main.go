@@ -79,6 +79,13 @@ func main() {
 		log.Printf("Warning: failed to create spool: %v (Arrow file output disabled)", err)
 	}
 
+	// Set persistent dir for pinned results (CWD/duckdb-results/)
+	if sp != nil {
+		if cwd, err := os.Getwd(); err == nil {
+			sp.PersistentDir = cwd + "/duckdb-results"
+		}
+	}
+
 	// Create kernel
 	k := kernel.NewKernel(connInfo, sess, sp)
 

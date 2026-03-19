@@ -59,6 +59,8 @@ module.exports = {
         pspAsset('viewer/dist/wasm/perspective-viewer.wasm'),
         // CSS themes
         pspAsset('viewer/dist/css/themes.css'),
+        // Icons
+        { from: path.resolve(__dirname, '../../icons'), to: 'icons/[name][ext]' },
       ],
     }),
   ],

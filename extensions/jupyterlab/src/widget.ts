@@ -13,6 +13,7 @@ import { registerMapPlugin } from './map-plugin';
 const MIME_TYPE = 'application/vnd.hugr.result+json';
 
 const STATIC_BASE = '/lab/extensions/@hugr-lab/perspective-viewer/static/perspective';
+const ICONS_BASE = '/lab/extensions/@hugr-lab/perspective-viewer/static/icons';
 
 /** Geometry column metadata from Arrow schema detection. */
 interface GeometryColumnMeta {
@@ -132,7 +133,9 @@ function parseTruncation(arrowUrl: string): {
 
 function buildFullUrl(arrowUrl: string): string {
   try {
-    const url = new URL(arrowUrl);
+    // First rebuild with current base URL (handles port changes after reload)
+    const rebuilt = rebuildArrowUrl(arrowUrl);
+    const url = new URL(rebuilt);
     url.searchParams.delete('limit');
     url.searchParams.delete('total');
     return url.toString();
@@ -144,6 +147,9 @@ function buildFullUrl(arrowUrl: string): string {
 /** Cache of last known kernel base URL — updated on each execute result
  *  and from plugin.ts kernel_info discovery (survives page reload). */
 let _lastKnownBaseUrl: string | null = null;
+
+/** Module-level set of pinned query IDs — survives widget recreation on cell re-run. */
+const _pinnedQueryIds = new Set<string>();
 
 // Listen for base URL updates from plugin.ts (kernel reconnect after reload)
 document.addEventListener('hugr:base-url-update', ((e: CustomEvent) => {
@@ -289,6 +295,7 @@ interface ArrowPartState {
 export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
   private _mimeType: string;
   private _prevQueryIds: string[] = [];
+  private _isPinned = false;
   private _arrowParts: ArrowPartState[] = [];
   private _lazyRender: ((idx: number) => Promise<void>) | null = null;
   private _resizeObserver: ResizeObserver | null = null;
@@ -327,11 +334,43 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
     }
     if (newIds.length > 0) this._prevQueryIds = newIds;
 
-    // Render and then clean up old spool files
+    // Restore pin state: check module-level set first, then ask backend
+    if (!this._isPinned && oldQueryIds.some(id => _pinnedQueryIds.has(id))) {
+      this._isPinned = true;
+    }
+    if (!this._isPinned && baseUrl && newIds.length > 0) {
+      // Check backend for pin status (handles page reload case)
+      for (const id of newIds) {
+        try {
+          const resp = await fetch(`${baseUrl}/spool/is_pinned?query_id=${id}`);
+          if (resp.ok) {
+            const data = await resp.json();
+            if (data.pinned) {
+              this._isPinned = true;
+              _pinnedQueryIds.add(id);
+              break;
+            }
+          }
+        } catch { /* ignore */ }
+      }
+    }
+
+    // Render and then clean up old spool files + auto-pin if cell was pinned
     const cleanupOld = () => {
       if (oldQueryIds.length > 0 && baseUrl) {
         for (const id of oldQueryIds) {
+          _pinnedQueryIds.delete(id);
           fetch(`${baseUrl}/spool/delete?query_id=${id}`, { method: 'DELETE' }).catch(() => {});
+        }
+      }
+      // Auto-pin new results if this cell was previously pinned
+      // Skip IDs that are already pinned (e.g. after page reload)
+      if (this._isPinned && baseUrl && newIds.length > 0) {
+        for (const id of newIds) {
+          if (!_pinnedQueryIds.has(id)) {
+            _pinnedQueryIds.add(id);
+            fetch(`${baseUrl}/spool/pin?query_id=${id}`, { method: 'POST' }).catch(() => {});
+          }
         }
       }
     };
@@ -636,7 +675,8 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
 
       const openTabBtn = document.createElement('button');
       openTabBtn.className = 'hugr-open-tab-btn';
-      openTabBtn.textContent = 'Open in Tab';
+      openTabBtn.innerHTML = `<img src="${ICONS_BASE}/open-in-new-tab.png" class="hugr-btn-icon" alt="Open in Tab">`;
+      openTabBtn.title = 'Open in Tab';
       openTabBtn.addEventListener('click', () => {
         document.dispatchEvent(new CustomEvent('hugr:open-in-tab', {
           detail: {
@@ -648,6 +688,15 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
         }));
       });
       banner.appendChild(openTabBtn);
+
+      // Pin/Unpin toggle button
+      const pinBtn = this._createPinButton(() => {
+        try {
+          const u = new URL(part.arrow_url!);
+          return u.searchParams.get('q');
+        } catch { return null; }
+      });
+      banner.appendChild(pinBtn);
 
       container.appendChild(banner);
     }
@@ -661,7 +710,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       const perspective = await loadPerspective();
       const abortController = new AbortController();
       const client = await perspective.worker();
-      const table = await streamArrowToTable(part.arrow_url, client, abortController.signal);
+      const table = await streamArrowToTable(rebuildArrowUrl(part.arrow_url!), client, abortController.signal);
 
       loading.remove();
 
@@ -724,7 +773,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
 
     const openTabBtn = document.createElement('button');
     openTabBtn.className = 'hugr-open-tab-btn';
-    openTabBtn.textContent = 'Open in Tab';
+    openTabBtn.innerHTML = `<img src="${ICONS_BASE}/open-in-new-tab.png" class="hugr-btn-icon" alt="Open in Tab">`;
     openTabBtn.title = 'Open JSON in a separate tab';
     openTabBtn.addEventListener('click', () => {
       document.dispatchEvent(new CustomEvent('hugr:open-json-in-tab', {
@@ -906,7 +955,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
 
   /** Backward-compatible: render single Arrow result from flat fields. */
   private async _renderSingleArrow(metadata: FlatMetadata): Promise<void> {
-    const arrowUrl = metadata.arrow_url!;
+    const arrowUrl = rebuildArrowUrl(metadata.arrow_url!);
     const truncation = parseTruncation(arrowUrl);
 
     this.node.innerHTML = '<div class="hugr-result-loading">Loading viewer...</div>';
@@ -960,7 +1009,8 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
 
         const openTabBtn = document.createElement('button');
         openTabBtn.className = 'hugr-open-tab-btn';
-        openTabBtn.textContent = 'Open in Tab';
+        openTabBtn.innerHTML = `<img src="${ICONS_BASE}/open-in-new-tab.png" class="hugr-btn-icon" alt="Open in Tab">`;
+      openTabBtn.title = 'Open in Tab';
         openTabBtn.addEventListener('click', () => {
           document.dispatchEvent(new CustomEvent('hugr:open-in-tab', {
             detail: {
@@ -972,6 +1022,15 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
           }));
         });
         banner.appendChild(openTabBtn);
+
+        // Pin/Unpin toggle button
+        const pinBtn = this._createPinButton(() => {
+          try {
+            const u = new URL(metadata.arrow_url!);
+            return u.searchParams.get('q');
+          } catch { return null; }
+        });
+        banner.appendChild(pinBtn);
 
         this.node.appendChild(banner);
       }
@@ -1041,10 +1100,12 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
   }
 
   dispose(): void {
-    // Delete spool files when cell/widget is removed
+    // Delete spool files when cell/widget is removed — but skip pinned ones
     if (this._prevQueryIds.length > 0 && _lastKnownBaseUrl) {
       for (const id of this._prevQueryIds) {
-        fetch(`${_lastKnownBaseUrl}/spool/delete?query_id=${id}`, { method: 'DELETE' }).catch(() => {});
+        if (!_pinnedQueryIds.has(id)) {
+          fetch(`${_lastKnownBaseUrl}/spool/delete?query_id=${id}`, { method: 'DELETE' }).catch(() => {});
+        }
       }
     }
     void this._cleanup();
@@ -1063,6 +1124,56 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
     div.className = 'hugr-result-expired';
     div.textContent = 'Result expired. Re-run the cell to refresh.';
     this.node.replaceChildren(div);
+  }
+
+  /** Create a Pin/Unpin toggle button. getQueryId returns the query ID from the arrow URL. */
+  private _createPinButton(getQueryId: () => string | null): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.className = 'hugr-pin-btn';
+
+    const updateLabel = () => {
+      const src = this._isPinned ? `${ICONS_BASE}/unpin.png` : `${ICONS_BASE}/pin.png`;
+      const title = this._isPinned ? 'Unpin results' : 'Pin results';
+      btn.innerHTML = `<img src="${src}" class="hugr-btn-icon" alt="${title}">`;
+      btn.title = title;
+      btn.classList.toggle('hugr-pin-btn-active', this._isPinned);
+    };
+    updateLabel();
+
+    btn.addEventListener('click', async () => {
+      const base = _lastKnownBaseUrl;
+      if (!base) return;
+      const qid = getQueryId();
+      if (!qid) return;
+
+      btn.disabled = true;
+      const wasPinned = this._isPinned;
+      const endpoint = wasPinned ? 'unpin' : 'pin';
+
+      try {
+        const resp = await fetch(`${base}/spool/${endpoint}?query_id=${qid}`, { method: 'POST' });
+        if (resp.ok) {
+          this._isPinned = !wasPinned;
+          if (this._isPinned) {
+            _pinnedQueryIds.add(qid);
+          } else {
+            _pinnedQueryIds.delete(qid);
+          }
+          updateLabel();
+        } else {
+          btn.textContent = 'Error';
+          setTimeout(() => { updateLabel(); btn.disabled = false; }, 2000);
+          return;
+        }
+      } catch {
+        btn.textContent = 'Error';
+        setTimeout(() => { updateLabel(); btn.disabled = false; }, 2000);
+        return;
+      }
+      btn.disabled = false;
+    });
+
+    return btn;
   }
 }
 

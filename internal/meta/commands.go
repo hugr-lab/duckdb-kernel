@@ -3,12 +3,14 @@ package meta
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/hugr-lab/duckdb-kernel/internal/engine"
 	"github.com/hugr-lab/duckdb-kernel/internal/renderer"
+	"github.com/hugr-lab/duckdb-kernel/internal/spool"
 )
 
 // CommandResult holds the output of a meta command with optional MIME type.
@@ -30,16 +32,18 @@ type Registry struct {
 	descriptions map[string]string
 	eng          *engine.Engine
 	setLimit     func(int)
+	spool        *spool.Spool
 }
 
 // NewRegistry creates a new command registry with default commands.
-func NewRegistry(eng *engine.Engine, setLimit func(int)) *Registry {
+func NewRegistry(eng *engine.Engine, setLimit func(int), sp *spool.Spool) *Registry {
 	r := &Registry{
 		commands:     make(map[string]CommandHandler),
 		richCommands: make(map[string]RichCommandHandler),
 		descriptions: make(map[string]string),
 		eng:          eng,
 		setLimit:     setLimit,
+		spool:        sp,
 	}
 	r.registerDefaults()
 	return r
@@ -53,6 +57,8 @@ func (r *Registry) registerDefaults() {
 	r.Register("describe", "Show columns and types (DESCRIBE)", r.handleDescribe)
 	r.RegisterRich("explain", "Show query execution plan (EXPLAIN ANALYZE)", r.handleExplain)
 	r.Register("limit", "Set preview row limit", r.handleLimit)
+	r.Register("save_results", "Pin query result to persistent storage", r.handleSaveResults)
+	r.Register("clear_results", "Delete all pinned results", r.handleClearResults)
 }
 
 // Register adds a command to the registry.
@@ -112,6 +118,8 @@ func (r *Registry) handleHelp(_ context.Context, _ []string) (string, error) {
 	sb.WriteString("  :describe <table|query>  Show columns and types (DESCRIBE)\n")
 	sb.WriteString("  :explain <SQL>      Show query execution plan (EXPLAIN ANALYZE)\n")
 	sb.WriteString("  :limit <n>          Set preview row limit\n")
+	sb.WriteString("  :save_results <id>  Pin query result to persistent storage\n")
+	sb.WriteString("  :clear_results      Delete all pinned results\n")
 	return sb.String(), nil
 }
 
@@ -235,4 +243,43 @@ func (r *Registry) executeAndRender(ctx context.Context, query string) (string, 
 	}
 
 	return renderer.RenderTable(columns, result.Rows), nil
+}
+
+func (r *Registry) handleSaveResults(_ context.Context, args []string) (string, error) {
+	if r.spool == nil {
+		return "", fmt.Errorf("spool not available")
+	}
+	if len(args) == 0 {
+		return "", fmt.Errorf("Usage: :save_results <query_id>")
+	}
+	queryID := args[0]
+	if err := r.spool.Pin(queryID); err != nil {
+		return "", fmt.Errorf("pin failed: %w", err)
+	}
+	return fmt.Sprintf("Result %s saved to %s", queryID, r.spool.PersistentDir), nil
+}
+
+func (r *Registry) handleClearResults(_ context.Context, _ []string) (string, error) {
+	if r.spool == nil {
+		return "", fmt.Errorf("spool not available")
+	}
+	if r.spool.PersistentDir == "" {
+		return "", fmt.Errorf("persistent dir not configured")
+	}
+	entries, err := os.ReadDir(r.spool.PersistentDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "No pinned results to clear", nil
+		}
+		return "", fmt.Errorf("read persistent dir: %w", err)
+	}
+	count := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".arrow") {
+			continue
+		}
+		os.Remove(r.spool.PersistentDir + "/" + e.Name())
+		count++
+	}
+	return fmt.Sprintf("Cleared %d pinned result(s)", count), nil
 }

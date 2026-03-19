@@ -73,7 +73,7 @@ func NewKernel(connInfo *ConnectionInfo, sess *session.Session, sp *spool.Spool)
 		key:      []byte(connInfo.Key),
 		shutdown: make(chan struct{}),
 	}
-	k.metaRegistry = meta.NewRegistry(sess.Engine, sess.SetPreviewLimit)
+	k.metaRegistry = meta.NewRegistry(sess.Engine, sess.SetPreviewLimit, sp)
 	historyDir := os.TempDir()
 	if sp != nil {
 		historyDir = sp.Dir

@@ -53,19 +53,46 @@
   cursor: wait;
 }
 
-.hugr-open-tab-btn {
-  padding: 4px 12px;
+/* Icon buttons (Pin, Open in Tab) */
+
+.hugr-btn-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.hugr-open-tab-btn,
+.hugr-pin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 4px;
   border: 1px solid var(--jp-border-color1, #ccc);
   border-radius: 3px;
   background: var(--jp-layout-color1, #fff);
-  color: var(--jp-ui-font-color1, #333);
-  font-size: var(--jp-ui-font-size1, 13px);
   cursor: pointer;
-  white-space: nowrap;
 }
 
-.hugr-open-tab-btn:hover {
+.hugr-open-tab-btn:hover,
+.hugr-pin-btn:hover {
   background: var(--jp-layout-color2, #f0f0f0);
+}
+
+.hugr-pin-btn-active {
+  background: var(--jp-brand-color3, #e3f2fd);
+  border-color: var(--jp-brand-color1, #1976d2);
+}
+
+.hugr-pin-btn-active:hover {
+  background: var(--jp-brand-color2, #bbdefb);
+}
+
+.hugr-pin-btn:disabled,
+.hugr-open-tab-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
 }
 
 /* Perspective tab widget */
