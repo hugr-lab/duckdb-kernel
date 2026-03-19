@@ -95,7 +95,7 @@ func (s *Spool) NewStreamWriter(queryID string) (*StreamWriter, error) {
 // Write writes a single record batch to the IPC stream.
 func (sw *StreamWriter) Write(rec arrow.RecordBatch) error {
 	if sw.w == nil {
-		sw.w = ipc.NewWriter(sw.f, ipc.WithSchema(rec.Schema()))
+		sw.w = ipc.NewWriter(sw.f, ipc.WithSchema(rec.Schema()), ipc.WithLZ4())
 	}
 	return sw.w.Write(rec)
 }
