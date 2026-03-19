@@ -21,22 +21,25 @@ let BitmapLayer: any;
 let ColumnLayer: any;
 let H3HexagonLayer: any;
 let TileLayer: any;
-let _deckLoaded = false;
+let _deckPromise: Promise<void> | null = null;
 
-async function ensureDeckGL(): Promise<void> {
-  if (_deckLoaded) return;
-  const core = await import('@deck.gl/core');
-  const layers = await import('@deck.gl/layers');
-  const geo = await import('@deck.gl/geo-layers');
-  Deck = core.Deck;
-  ScatterplotLayer = layers.ScatterplotLayer;
-  SolidPolygonLayer = layers.SolidPolygonLayer;
-  PathLayer = layers.PathLayer;
-  BitmapLayer = layers.BitmapLayer;
-  ColumnLayer = layers.ColumnLayer;
-  H3HexagonLayer = geo.H3HexagonLayer;
-  TileLayer = geo.TileLayer;
-  _deckLoaded = true;
+function ensureDeckGL(): Promise<void> {
+  if (!_deckPromise) {
+    _deckPromise = (async () => {
+      const core = await import('@deck.gl/core');
+      const layers = await import('@deck.gl/layers');
+      const geo = await import('@deck.gl/geo-layers');
+      Deck = core.Deck;
+      ScatterplotLayer = layers.ScatterplotLayer;
+      SolidPolygonLayer = layers.SolidPolygonLayer;
+      PathLayer = layers.PathLayer;
+      BitmapLayer = layers.BitmapLayer;
+      ColumnLayer = layers.ColumnLayer;
+      H3HexagonLayer = geo.H3HexagonLayer;
+      TileLayer = geo.TileLayer;
+    })();
+  }
+  return _deckPromise;
 }
 
 /** Geometry column metadata passed from the renderer. */

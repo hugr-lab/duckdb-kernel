@@ -185,7 +185,8 @@ Streaming Arrow IPC endpoint. Returns data as length-prefixed chunks.
 |---|---|---|
 | `q` | Yes | Query ID (UUID). |
 | `limit` | No | Maximum number of rows to return. |
-| `geoarrow` | No | If `"1"`, convert WKB geometry columns to native GeoArrow format. |
+| `total` | No | Total row count before limit truncation. When present with `limit`, the viewer shows a "Load all N rows" banner. |
+| `geoarrow` | No | If `"1"`, pass through native GeoArrow geometry columns unchanged. If absent, replace geometry columns with `"{geometry}"` strings. |
 | `columns` | No | Comma-separated list of columns to include (projection). |
 
 **Wire format:**
@@ -357,54 +358,36 @@ When `geometry_columns` is present on an Arrow part, the viewer registers a "Geo
 
 ### How the kernel should detect geometry columns
 
-Scan Arrow schema for columns with:
-- Binary type containing WKB data (check first value for WKB magic byte `0x01` or `0x00`)
-- String type containing GeoJSON or WKT
-- Extension type metadata (`ARROW:extension:name` = `geoarrow.wkb`, `geoarrow.point`, etc.)
+The kernel uses two complementary detection mechanisms (see `detectGeometryColumns` in `internal/engine/result.go`):
+
+**Source 1: Arrow field metadata** — Scan each field for `ARROW:extension:name`:
+- `geoarrow.wkb` or `ogc.wkb` — detected as WKB format
+- `geoarrow.point`, `geoarrow.multipoint` — detected as GeoArrow:point
+- `geoarrow.linestring`, `geoarrow.multilinestring` — detected as GeoArrow:linestring
+- `geoarrow.polygon`, `geoarrow.multipolygon` — detected as GeoArrow:polygon
+
+SRID is parsed from `ARROW:extension:metadata` JSON (`{"srid": 4326}`), defaulting to 4326.
+
+**Source 2: Schema-level metadata** — If a field was not detected via Arrow metadata, check for `X-Hugr-Geometry-Fields` in the schema-level metadata. This is a JSON array of `{"name", "srid", "format"}` objects, used as a fallback for sources (e.g. HugrIPC) that set schema-level metadata instead of per-field extension types.
 
 Include detected geometry columns in `geometry_columns` array with appropriate `format` and `srid`.
 
 ### GeoArrow streaming endpoint
 
-When the viewer requests `/arrow/stream?q=ID&geoarrow=1`:
+GeoArrow conversion is a **two-phase** process. The heavy WKB-to-GeoArrow conversion happens at **query execution time**, not at streaming time.
 
-- WKB binary columns should be converted to native GeoArrow struct arrays (Point, LineString, Polygon)
-- This enables direct deck.gl rendering without client-side WKB parsing
+**Phase 1 — Query execution (session.go):**
+The kernel converts WKB binary columns to native GeoArrow struct arrays (Point, LineString, Polygon) immediately after query execution, **before** writing the spool file. The spool file therefore already contains native GeoArrow data with proper `ARROW:extension:name` metadata.
 
-When `geoarrow=1` is NOT set:
+**Phase 2 — Streaming (`/arrow/stream`):**
+The streaming endpoint reads the spool file (which already contains native GeoArrow columns) and applies lightweight transformations:
 
-- WKB binary columns should be replaced with string `"{geometry}"` for Perspective compatibility (binary columns crash Perspective)
+- `geoarrow=1`: **Pass through** — native GeoArrow columns are streamed unchanged. This enables direct deck.gl rendering without any conversion overhead at streaming time.
+- No `geoarrow` parameter (default): **String replacement** — geometry columns are replaced with the string `"{geometry}"` for Perspective compatibility (binary/struct columns crash Perspective).
 
-## Arrow Streaming Pipeline
+### Query-time conversion
 
-The `/arrow/stream` endpoint applies a pipeline of transformations to Arrow record batches before sending them to the viewer. The pipeline is built from query parameters:
-
-```
-Spool file → IPC Reader → [Column Projection] → [GeoArrow Convert | String Replace] → IPC Stream → HTTP
-```
-
-### Column Projection (`columns` parameter)
-
-When `columns=col1,col2,col3` is passed, only the listed columns are included in the output. This reduces data transfer for wide tables.
-
-Implementation uses `pkg/geoarrow.NewProjector`:
-
-```go
-import "github.com/hugr-lab/duckdb-kernel/pkg/geoarrow"
-
-// Create a projector that selects only requested columns
-projCols := map[string]bool{"col1": true, "col2": true}
-source := geoarrow.NewProjector(reader, projCols)
-// source implements array.RecordReader, streams projected batches
-```
-
-`NewProjector` returns the original reader unchanged if no projection is needed (all columns requested or empty set).
-
-### GeoArrow Conversion (`geoarrow=1` parameter)
-
-When `geoarrow=1` is set, WKB binary geometry columns are converted to native GeoArrow struct arrays on-the-fly. This is required for deck.gl map rendering.
-
-Implementation uses `pkg/geoarrow.NewConverter`:
+WKB-to-GeoArrow conversion uses `pkg/geoarrow.NewConverter` and runs during query execution, before the result is written to the spool file:
 
 ```go
 import "github.com/hugr-lab/duckdb-kernel/pkg/geoarrow"
@@ -425,6 +408,39 @@ The converter:
 - Auto-detects geometry type from first batch (Point vs Polygon etc.)
 - Runs conversion in a pipelined goroutine for better throughput
 
+## Arrow Streaming Pipeline
+
+The data pipeline has two stages: query-time conversion and streaming-time projection/filtering.
+
+### Full pipeline diagram
+
+```text
+Query execution: SQL → Arrow batches → [WKB→GeoArrow Convert] → LZ4 compress → Spool file
+
+Streaming: Spool file → IPC Reader → [Column Projection] → [String Replace (default) | Pass-through (geoarrow=1)] → IPC Stream → HTTP
+```
+
+### Column Projection (`columns` parameter)
+
+When `columns=col1,col2,col3` is passed, only the listed columns are included in the output. This reduces data transfer for wide tables.
+
+Implementation uses `pkg/geoarrow.NewProjector`:
+
+```go
+import "github.com/hugr-lab/duckdb-kernel/pkg/geoarrow"
+
+// Create a projector that selects only requested columns
+projCols := map[string]bool{"col1": true, "col2": true}
+source := geoarrow.NewProjector(reader, projCols)
+// source implements array.RecordReader, streams projected batches
+```
+
+`NewProjector` returns the original reader unchanged if no projection is needed (all columns requested or empty set).
+
+### Pass-through (`geoarrow=1` parameter)
+
+When `geoarrow=1` is set, the spool file's native GeoArrow columns are streamed unchanged. No conversion happens at streaming time — the data was already converted during query execution. This is required for deck.gl map rendering.
+
 ### String Replacement (default, no `geoarrow` parameter)
 
 When `geoarrow=1` is NOT set, geometry columns are replaced with the string `"{geometry}"` to prevent Perspective from crashing on binary data.
@@ -439,24 +455,21 @@ defer replacer.Release()
 // replacer implements array.RecordReader
 ```
 
-### Full pipeline example
+### Full streaming pipeline example
 
 ```go
 // Build reader pipeline for /arrow/stream
-var source array.RecordReader = ipcReader
+var source array.RecordReader = ipcReader // reads from spool (already contains GeoArrow data)
 
 // 1. Column projection (if requested)
 if projCols != nil {
     source = geoarrow.NewProjector(source, projCols)
 }
 
-// 2. Geometry handling
+// 2. Geometry handling at streaming time
 if wantGeoArrow {
-    // Convert WKB → native GeoArrow for deck.gl
-    source = geoarrow.NewConverter(source,
-        geoarrow.WithAllocator(mem),
-        geoarrow.WithContext(ctx),
-    )
+    // Pass through — native GeoArrow columns are already in the spool file
+    // No conversion needed
 } else {
     // Replace geometry with "{geometry}" string for Perspective
     source = geoarrow.NewStringReplacer(source)

@@ -10,9 +10,37 @@
  * Works offline — all assets bundled, no CDN/internet required.
  */
 
-import { Deck } from '@deck.gl/core';
-import { ScatterplotLayer, SolidPolygonLayer, PathLayer, BitmapLayer, ColumnLayer } from '@deck.gl/layers';
-import { H3HexagonLayer, TileLayer } from '@deck.gl/geo-layers';
+// Deck.gl imports are loaded dynamically to avoid "multiple versions" errors
+// when keplergl (deck.gl 8.x) coexists with our deck.gl 9.x.
+// The module-level import would crash before any code runs, causing TDZ errors.
+let Deck: any;
+let ScatterplotLayer: any;
+let SolidPolygonLayer: any;
+let PathLayer: any;
+let BitmapLayer: any;
+let ColumnLayer: any;
+let H3HexagonLayer: any;
+let TileLayer: any;
+
+let _deckPromise: Promise<void> | null = null;
+function ensureDeckGL(): Promise<void> {
+  if (!_deckPromise) {
+    _deckPromise = (async () => {
+      const core = await import('@deck.gl/core');
+      const layers = await import('@deck.gl/layers');
+      const geo = await import('@deck.gl/geo-layers');
+      Deck = core.Deck;
+      ScatterplotLayer = layers.ScatterplotLayer;
+      SolidPolygonLayer = layers.SolidPolygonLayer;
+      PathLayer = layers.PathLayer;
+      BitmapLayer = layers.BitmapLayer;
+      ColumnLayer = layers.ColumnLayer;
+      H3HexagonLayer = geo.H3HexagonLayer;
+      TileLayer = geo.TileLayer;
+    })();
+  }
+  return _deckPromise;
+}
 
 /** Geometry column metadata passed from the renderer. */
 interface GeometryColumnMeta {
@@ -1301,7 +1329,12 @@ function buildMappedLayers(
 }
 
 // Compass SVG icon for the map plugin selector (16x16)
-const MAP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="-40 -40 592 592" fill="none" stroke="currentColor" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+// NOTE: Lazily initialized inside registerMapPlugin() to avoid TDZ errors
+// when top-level deck.gl imports fail (e.g. version conflicts).
+let _mapIconB64: string | null = null;
+function getMapIconB64(): string {
+  if (_mapIconB64 === null) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="-40 -40 592 592" fill="none" stroke="currentColor" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
   <circle cx="256" cy="256" r="200"/>
   <line x1="256" y1="56" x2="256" y2="96"/>
   <line x1="256" y1="416" x2="256" y2="456"/>
@@ -1312,10 +1345,16 @@ const MAP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height=
     <polygon points="256,366 300,256 212,256" fill="currentColor" stroke="currentColor" stroke-width="12"/>
   </g>
 </svg>`;
-const MAP_ICON_B64 = 'data:image/svg+xml;base64,' + btoa(MAP_ICON_SVG);
+    _mapIconB64 = 'data:image/svg+xml;base64,' + btoa(svg);
+  }
+  return _mapIconB64;
+}
 
 export async function registerMapPlugin(): Promise<void> {
   if (customElements.get('perspective-viewer-map')) return;
+
+  await ensureDeckGL();
+  const MAP_ICON_B64 = getMapIconB64();
 
   // Inject plugin icon CSS variable on host (inherits into shadow DOM)
   // and add the selector rule for our plugin name
