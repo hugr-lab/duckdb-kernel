@@ -11,7 +11,9 @@ export function showPerspectivePanel(metadata: {
   query_id: string;
   arrow_url: string;
   base_url: string;
-}): void {
+  geometry_columns?: any[];
+  tile_sources?: any[];
+}, extensionUri: vscode.Uri): void {
   const existing = activePanels.get(metadata.query_id);
   if (existing) {
     existing.reveal();
@@ -26,7 +28,12 @@ export function showPerspectivePanel(metadata: {
     {
       enableScripts: true,
       retainContextWhenHidden: true,
+      localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'out')],
     },
+  );
+
+  const mapPluginUri = panel.webview.asWebviewUri(
+    vscode.Uri.joinPath(extensionUri, 'out', 'map-plugin.js'),
   );
 
   activePanels.set(metadata.query_id, panel);
@@ -56,14 +63,16 @@ export function showPerspectivePanel(metadata: {
     }
   });
 
-  panel.webview.html = buildPerspectiveHtml(metadata);
+  panel.webview.html = buildPerspectiveHtml(metadata, mapPluginUri);
 }
 
 function buildPerspectiveHtml(metadata: {
   query_id: string;
   arrow_url: string;
   base_url: string;
-}): string {
+  geometry_columns?: any[];
+  tile_sources?: any[];
+}, mapPluginUri: vscode.Uri): string {
   const staticBase = `${metadata.base_url}/static/perspective`;
   const arrowUrl = metadata.arrow_url;
 
@@ -73,11 +82,11 @@ function buildPerspectiveHtml(metadata: {
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy"
     content="default-src 'none';
-      script-src 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:* http://localhost:*;
+      script-src 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:* http://localhost:* https://*.vscode-resource.vscode-cdn.net;
       style-src 'unsafe-inline' http://127.0.0.1:* http://localhost:*;
-      connect-src http://127.0.0.1:* http://localhost:*;
+      connect-src http://127.0.0.1:* http://localhost:* https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org https://*.tiles.mapbox.com;
       font-src http://127.0.0.1:* http://localhost:*;
-      img-src http://127.0.0.1:* http://localhost:* data:;
+      img-src http://127.0.0.1:* http://localhost:* https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org https://*.tiles.mapbox.com data:;
       worker-src blob:;">
   <style>
     html, body {
@@ -150,6 +159,7 @@ function buildPerspectiveHtml(metadata: {
     <div id="loading">Loading Perspective viewer...</div>
     <div id="error"></div>
   </div>
+  <script src="${mapPluginUri}"><\/script>
   <script type="module">
     const vscode = acquireVsCodeApi();
     const staticBase = ${JSON.stringify(staticBase)};
@@ -277,6 +287,24 @@ function buildPerspectiveHtml(metadata: {
         viewer.setAttribute('plugin', 'Datagrid');
         viewer.style.cssText = 'flex: 1; width: 100%; height: 100%;';
         container.appendChild(viewer);
+
+        // Wait for map plugin registration (loaded via script tag in head)
+        if (window.__mapPluginReady) {
+          await window.__mapPluginReady;
+        }
+
+        // Pass geometry metadata for the map plugin
+        const geoCols = ${JSON.stringify(metadata.geometry_columns || [])};
+        const tileSources = ${JSON.stringify(metadata.tile_sources || [])};
+        if (geoCols.length > 0) {
+          viewer.setAttribute('data-geometry-columns', JSON.stringify(geoCols));
+        }
+        if (tileSources.length > 0) {
+          viewer.setAttribute('data-tile-sources', JSON.stringify(tileSources));
+        }
+        if (arrowUrl) {
+          viewer.setAttribute('data-arrow-url', arrowUrl);
+        }
 
         await viewer.load(table);
 

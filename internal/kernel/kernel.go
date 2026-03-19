@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 
 	zmq "github.com/go-zeromq/zmq4"
@@ -72,8 +73,12 @@ func NewKernel(connInfo *ConnectionInfo, sess *session.Session, sp *spool.Spool)
 		key:      []byte(connInfo.Key),
 		shutdown: make(chan struct{}),
 	}
-	k.metaRegistry = meta.NewRegistry(sess.Engine, sess.SetPreviewLimit)
-	k.history = NewHistory(sess.ID)
+	k.metaRegistry = meta.NewRegistry(sess.Engine, sess.SetPreviewLimit, sp)
+	historyDir := os.TempDir()
+	if sp != nil {
+		historyDir = sp.Dir
+	}
+	k.history = NewHistory(historyDir, sess.ID)
 	return k
 }
 
@@ -152,11 +157,8 @@ func (k *Kernel) close() error {
 	if k.arrowServer != nil {
 		k.arrowServer.Close()
 	}
-	if k.spool != nil {
-		if err := k.spool.Destroy(); err != nil {
-			log.Printf("spool destroy error: %v", err)
-		}
-	}
+	// Spool files are preserved for TTL-based recovery.
+	// Cleanup happens on next kernel start.
 	k.hbSocket.Close()
 	k.shellSocket.Close()
 	k.controlSocket.Close()

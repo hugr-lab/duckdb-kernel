@@ -13,6 +13,7 @@ import { registerMapPlugin } from './map-plugin';
 const MIME_TYPE = 'application/vnd.hugr.result+json';
 
 const STATIC_BASE = '/lab/extensions/@hugr-lab/perspective-viewer/static/perspective';
+const ICONS_BASE = '/lab/extensions/@hugr-lab/perspective-viewer/static/icons';
 
 /** Geometry column metadata from Arrow schema detection. */
 interface GeometryColumnMeta {
@@ -132,12 +133,45 @@ function parseTruncation(arrowUrl: string): {
 
 function buildFullUrl(arrowUrl: string): string {
   try {
-    const url = new URL(arrowUrl);
+    // First rebuild with current base URL (handles port changes after reload)
+    const rebuilt = rebuildArrowUrl(arrowUrl);
+    const url = new URL(rebuilt);
     url.searchParams.delete('limit');
     url.searchParams.delete('total');
     return url.toString();
   } catch {
     return arrowUrl;
+  }
+}
+
+/** Cache of last known kernel base URL — updated on each execute result
+ *  and from plugin.ts kernel_info discovery (survives page reload). */
+let _lastKnownBaseUrl: string | null = null;
+
+/** Module-level set of pinned query IDs — survives widget recreation on cell re-run. */
+const _pinnedQueryIds = new Set<string>();
+
+// Listen for base URL updates from plugin.ts (kernel reconnect after reload)
+document.addEventListener('hugr:base-url-update', ((e: CustomEvent) => {
+  if (e.detail?.baseUrl) {
+    _lastKnownBaseUrl = e.detail.baseUrl;
+  }
+}) as EventListener);
+
+/** Rebuild Arrow URL using the latest known kernel base URL.
+ *  Extracts queryID from old URL and builds new URL with current port. */
+function rebuildArrowUrl(oldUrl: string, baseUrl?: string): string {
+  const base = baseUrl || _lastKnownBaseUrl;
+  if (!base) return oldUrl;
+  try {
+    const old = new URL(oldUrl);
+    const q = old.searchParams.get('q');
+    if (!q) return oldUrl;
+    const rebuilt = new URL(`${base}${old.pathname}`);
+    old.searchParams.forEach((v, k) => rebuilt.searchParams.set(k, v));
+    return rebuilt.toString();
+  } catch {
+    return oldUrl;
   }
 }
 
@@ -156,7 +190,26 @@ async function streamArrowToTable(
   perspectiveWorker: any,
   signal?: AbortSignal,
 ): Promise<any> {
-  const response = await fetch(arrowUrl, { signal });
+  // Try fetch, retry with rebuilt URL on connection error (port may have changed after reload)
+  let response: Response | undefined;
+  try {
+    response = await fetch(arrowUrl, { signal });
+  } catch {
+    // Connection error — wait for kernel base URL discovery, then retry
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+      const rebuilt = rebuildArrowUrl(arrowUrl);
+      if (rebuilt !== arrowUrl) {
+        try {
+          response = await fetch(rebuilt, { signal });
+          break;
+        } catch { /* retry */ }
+      }
+    }
+    if (!response) {
+      throw new Error(`Result unavailable. Re-run the cell to refresh.`);
+    }
+  }
   if (!response.ok) {
     throw new Error(`Failed to fetch Arrow data (HTTP ${response.status})`);
   }
@@ -227,6 +280,8 @@ interface ArrowPartState {
 
 export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
   private _mimeType: string;
+  private _prevQueryIds: string[] = [];
+  private _isPinned = false;
   private _arrowParts: ArrowPartState[] = [];
   private _lazyRender: ((idx: number) => Promise<void>) | null = null;
   private _resizeObserver: ResizeObserver | null = null;
@@ -244,15 +299,79 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       return;
     }
 
+    // Cache kernel base URL for URL rebuilding on page reload
+    if (metadata.base_url) {
+      _lastKnownBaseUrl = metadata.base_url;
+    }
+
+    // Collect previous query IDs for cleanup after new render completes
+    const oldQueryIds = this._prevQueryIds;
+    const baseUrl = metadata.base_url || _lastKnownBaseUrl;
+
+    // Track current query IDs for cleanup on next re-run
+    const newIds: string[] = [];
+    if (metadata.query_id) newIds.push(metadata.query_id);
+    if (metadata.parts) {
+      for (const p of metadata.parts) {
+        if (p.arrow_url) {
+          try { const u = new URL(p.arrow_url); const q = u.searchParams.get('q'); if (q) newIds.push(q); } catch {}
+        }
+      }
+    }
+    if (newIds.length > 0) this._prevQueryIds = newIds;
+
+    // Restore pin state: check module-level set first, then ask backend
+    if (!this._isPinned && oldQueryIds.some(id => _pinnedQueryIds.has(id))) {
+      this._isPinned = true;
+    }
+    if (!this._isPinned && baseUrl && newIds.length > 0) {
+      // Check backend for pin status (handles page reload case)
+      for (const id of newIds) {
+        try {
+          const resp = await fetch(`${baseUrl}/spool/is_pinned?query_id=${id}`);
+          if (resp.ok) {
+            const data = await resp.json();
+            if (data.pinned) {
+              this._isPinned = true;
+              _pinnedQueryIds.add(id);
+              break;
+            }
+          }
+        } catch { /* ignore */ }
+      }
+    }
+
+    // Render and then clean up old spool files + auto-pin if cell was pinned
+    const cleanupOld = () => {
+      if (oldQueryIds.length > 0 && baseUrl) {
+        for (const id of oldQueryIds) {
+          _pinnedQueryIds.delete(id);
+          fetch(`${baseUrl}/spool/delete?query_id=${id}`, { method: 'DELETE' }).catch(() => {});
+        }
+      }
+      // Auto-pin new results if this cell was previously pinned
+      // Skip IDs that are already pinned (e.g. after page reload)
+      if (this._isPinned && baseUrl && newIds.length > 0) {
+        for (const id of newIds) {
+          if (!_pinnedQueryIds.has(id)) {
+            _pinnedQueryIds.add(id);
+            fetch(`${baseUrl}/spool/pin?query_id=${id}`, { method: 'POST' }).catch(() => {});
+          }
+        }
+      }
+    };
+
     // Multipart response with parts array
     if (metadata.parts && metadata.parts.length > 0) {
       await this._renderMultipart(metadata);
+      cleanupOld();
       return;
     }
 
     // Backward-compatible: single Arrow result via flat fields
     if (metadata.arrow_url) {
       await this._renderSingleArrow(metadata);
+      cleanupOld();
       return;
     }
 
@@ -542,7 +661,8 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
 
       const openTabBtn = document.createElement('button');
       openTabBtn.className = 'hugr-open-tab-btn';
-      openTabBtn.textContent = 'Open in Tab';
+      openTabBtn.innerHTML = `<img src="${ICONS_BASE}/open-in-new-tab.png" class="hugr-btn-icon" alt="Open in Tab">`;
+      openTabBtn.title = 'Open in Tab';
       openTabBtn.addEventListener('click', () => {
         document.dispatchEvent(new CustomEvent('hugr:open-in-tab', {
           detail: {
@@ -554,6 +674,15 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
         }));
       });
       banner.appendChild(openTabBtn);
+
+      // Pin/Unpin toggle button
+      const pinBtn = this._createPinButton(() => {
+        try {
+          const u = new URL(part.arrow_url!);
+          return u.searchParams.get('q');
+        } catch { return null; }
+      });
+      banner.appendChild(pinBtn);
 
       container.appendChild(banner);
     }
@@ -567,7 +696,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       const perspective = await loadPerspective();
       const abortController = new AbortController();
       const client = await perspective.worker();
-      const table = await streamArrowToTable(part.arrow_url, client, abortController.signal);
+      const table = await streamArrowToTable(rebuildArrowUrl(part.arrow_url!), client, abortController.signal);
 
       loading.remove();
 
@@ -599,10 +728,16 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       }
     } catch (err: any) {
       loading.remove();
-      const errorDiv = document.createElement('div');
-      errorDiv.className = 'hugr-result-error';
-      errorDiv.textContent = `Failed to load Arrow data: ${err?.message || 'Unknown error'}`;
-      container.appendChild(errorDiv);
+      const message = err?.message || 'Unknown error';
+      const div = document.createElement('div');
+      if (message.includes('Result unavailable') || message.includes('Failed to connect') || message.includes('Failed to fetch')) {
+        div.className = 'hugr-result-expired';
+        div.textContent = 'Result expired. Re-run the cell to refresh.';
+      } else {
+        div.className = 'hugr-result-error';
+        div.textContent = `Failed to load Arrow data: ${message}`;
+      }
+      container.appendChild(div);
     }
   }
 
@@ -624,7 +759,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
 
     const openTabBtn = document.createElement('button');
     openTabBtn.className = 'hugr-open-tab-btn';
-    openTabBtn.textContent = 'Open in Tab';
+    openTabBtn.innerHTML = `<img src="${ICONS_BASE}/open-in-new-tab.png" class="hugr-btn-icon" alt="Open in Tab">`;
     openTabBtn.title = 'Open JSON in a separate tab';
     openTabBtn.addEventListener('click', () => {
       document.dispatchEvent(new CustomEvent('hugr:open-json-in-tab', {
@@ -806,7 +941,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
 
   /** Backward-compatible: render single Arrow result from flat fields. */
   private async _renderSingleArrow(metadata: FlatMetadata): Promise<void> {
-    const arrowUrl = metadata.arrow_url!;
+    const arrowUrl = rebuildArrowUrl(metadata.arrow_url!);
     const truncation = parseTruncation(arrowUrl);
 
     this.node.innerHTML = '<div class="hugr-result-loading">Loading viewer...</div>';
@@ -860,7 +995,8 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
 
         const openTabBtn = document.createElement('button');
         openTabBtn.className = 'hugr-open-tab-btn';
-        openTabBtn.textContent = 'Open in Tab';
+        openTabBtn.innerHTML = `<img src="${ICONS_BASE}/open-in-new-tab.png" class="hugr-btn-icon" alt="Open in Tab">`;
+      openTabBtn.title = 'Open in Tab';
         openTabBtn.addEventListener('click', () => {
           document.dispatchEvent(new CustomEvent('hugr:open-in-tab', {
             detail: {
@@ -872,6 +1008,15 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
           }));
         });
         banner.appendChild(openTabBtn);
+
+        // Pin/Unpin toggle button
+        const pinBtn = this._createPinButton(() => {
+          try {
+            const u = new URL(metadata.arrow_url!);
+            return u.searchParams.get('q');
+          } catch { return null; }
+        });
+        banner.appendChild(pinBtn);
 
         this.node.appendChild(banner);
       }
@@ -904,7 +1049,11 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       }
     } catch (err: any) {
       const message = err?.message || 'Unknown error';
-      this._showError(`Failed to initialize viewer: ${message}`);
+      if (message.includes('Result unavailable') || message.includes('Failed to connect') || message.includes('Failed to fetch')) {
+        this._showExpired();
+      } else {
+        this._showError(`Failed to initialize viewer: ${message}`);
+      }
     }
   }
 
@@ -937,6 +1086,14 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
   }
 
   dispose(): void {
+    // Delete spool files when cell/widget is removed — but skip pinned ones
+    if (this._prevQueryIds.length > 0 && _lastKnownBaseUrl) {
+      for (const id of this._prevQueryIds) {
+        if (!_pinnedQueryIds.has(id)) {
+          fetch(`${_lastKnownBaseUrl}/spool/delete?query_id=${id}`, { method: 'DELETE' }).catch(() => {});
+        }
+      }
+    }
     void this._cleanup();
     super.dispose();
   }
@@ -946,6 +1103,63 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
     div.className = 'hugr-result-error';
     div.textContent = message;
     this.node.replaceChildren(div);
+  }
+
+  private _showExpired(): void {
+    const div = document.createElement('div');
+    div.className = 'hugr-result-expired';
+    div.textContent = 'Result expired. Re-run the cell to refresh.';
+    this.node.replaceChildren(div);
+  }
+
+  /** Create a Pin/Unpin toggle button. getQueryId returns the query ID from the arrow URL. */
+  private _createPinButton(getQueryId: () => string | null): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.className = 'hugr-pin-btn';
+
+    const updateLabel = () => {
+      const src = this._isPinned ? `${ICONS_BASE}/unpin.png` : `${ICONS_BASE}/pin.png`;
+      const title = this._isPinned ? 'Unpin results' : 'Pin results';
+      btn.innerHTML = `<img src="${src}" class="hugr-btn-icon" alt="${title}">`;
+      btn.title = title;
+      btn.classList.toggle('hugr-pin-btn-active', this._isPinned);
+    };
+    updateLabel();
+
+    btn.addEventListener('click', async () => {
+      const base = _lastKnownBaseUrl;
+      if (!base) return;
+      const qid = getQueryId();
+      if (!qid) return;
+
+      btn.disabled = true;
+      const wasPinned = this._isPinned;
+      const endpoint = wasPinned ? 'unpin' : 'pin';
+
+      try {
+        const resp = await fetch(`${base}/spool/${endpoint}?query_id=${qid}`, { method: 'POST' });
+        if (resp.ok) {
+          this._isPinned = !wasPinned;
+          if (this._isPinned) {
+            _pinnedQueryIds.add(qid);
+          } else {
+            _pinnedQueryIds.delete(qid);
+          }
+          updateLabel();
+        } else {
+          btn.textContent = 'Error';
+          setTimeout(() => { updateLabel(); btn.disabled = false; }, 2000);
+          return;
+        }
+      } catch {
+        btn.textContent = 'Error';
+        setTimeout(() => { updateLabel(); btn.disabled = false; }, 2000);
+        return;
+      }
+      btn.disabled = false;
+    });
+
+    return btn;
   }
 }
 

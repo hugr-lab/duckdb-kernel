@@ -255,11 +255,27 @@ export function activate(context: vscode.ExtensionContext) {
     rendererMessaging.onDidReceiveMessage((e) => {
       const msg = e.message as any;
       if (msg?.type === 'open-in-tab' && msg.arrow_url && msg.base_url) {
+        // Use the most recent known base_url (handles kernel restart with new port)
+        let baseUrl = msg.base_url;
+        const activeNotebook = vscode.window.activeNotebookEditor?.notebook;
+        if (activeNotebook) {
+          const entry = notebookClients.get(activeNotebook.uri.toString());
+          if (entry?.url) baseUrl = entry.url;
+        }
+        // Rebuild arrow_url with current base_url
+        let arrowUrl = msg.arrow_url;
+        try {
+          const old = new URL(msg.arrow_url);
+          const q = old.searchParams.get('q');
+          if (q) arrowUrl = `${baseUrl}${old.pathname}?q=${q}`;
+        } catch {}
         showPerspectivePanel({
           query_id: msg.title ?? 'result',
-          arrow_url: msg.arrow_url,
-          base_url: msg.base_url,
-        });
+          arrow_url: arrowUrl,
+          base_url: baseUrl,
+          geometry_columns: msg.geometry_columns,
+          tile_sources: msg.tile_sources,
+        }, context.extensionUri);
       }
       if (msg?.type === 'open-json-in-tab' && msg.data !== undefined) {
         showJsonPanel(msg.title ?? 'JSON', msg.data);

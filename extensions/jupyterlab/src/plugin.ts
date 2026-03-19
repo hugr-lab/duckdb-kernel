@@ -73,6 +73,8 @@ const sidebarPlugin: JupyterFrontEndPlugin<void> = {
         if (baseUrl && baseUrl !== discoveredUrl) {
           discoveredUrl = baseUrl;
           sidebar.setClient(new IntrospectClient(baseUrl));
+          // Broadcast base URL for widget.ts Arrow URL rebuilding
+          document.dispatchEvent(new CustomEvent('hugr:base-url-update', { detail: { baseUrl } }));
         }
       } catch {
         // Kernel may not support hugr_base_url.

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none" stroke="currentColor" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Main circle -->
+  <circle cx="256" cy="256" r="200"/>
+  <!-- Cardinal ticks N -->
+  <line x1="256" y1="56" x2="256" y2="96"/>
+  <!-- Cardinal ticks S -->
+  <line x1="256" y1="416" x2="256" y2="456"/>
+  <!-- Cardinal ticks W -->
+  <line x1="56" y1="256" x2="96" y2="256"/>
+  <!-- Cardinal ticks E -->
+  <line x1="416" y1="256" x2="456" y2="256"/>
+  <!-- Compass needle: two narrow triangles, rotated 45 degrees right -->
+  <g transform="rotate(45, 256, 256)">
+    <!-- Upper triangle (outline only) -->
+    <polygon points="256,146 300,256 212,256" fill="none" stroke="currentColor" stroke-width="12"/>
+    <!-- Lower triangle (filled) -->
+    <polygon points="256,366 300,256 212,256" fill="currentColor" stroke="currentColor" stroke-width="12"/>
+  </g>
+</svg>

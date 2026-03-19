@@ -23,12 +23,10 @@ type History struct {
 	path    string
 }
 
-// NewHistory creates a history backed by a temp file for the given session.
-func NewHistory(sessionID string) *History {
-	// Store history inside the session's spool directory (not alongside it)
-	dir := filepath.Join(os.TempDir(), "duckdb-kernel", sessionID)
+// NewHistory creates a history backed by a file in the given directory.
+func NewHistory(dir string, sessionID string) *History {
 	os.MkdirAll(dir, 0o755)
-	path := filepath.Join(dir, "history.json")
+	path := filepath.Join(dir, "history_"+filepath.Base(sessionID)+".json")
 	h := &History{path: path}
 	h.load()
 	return h

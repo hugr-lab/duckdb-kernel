@@ -1296,13 +1296,17 @@ function buildMappedLayers(
   return layers;
 }
 
-// Globe/map SVG icon for the plugin selector (16x16)
-const MAP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none">
-  <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.2"/>
-  <ellipse cx="8" cy="8" rx="3" ry="6.5" stroke="currentColor" stroke-width="1"/>
-  <line x1="1.5" y1="5.5" x2="14.5" y2="5.5" stroke="currentColor" stroke-width="0.8"/>
-  <line x1="1.5" y1="10.5" x2="14.5" y2="10.5" stroke="currentColor" stroke-width="0.8"/>
-  <line x1="8" y1="1.5" x2="8" y2="14.5" stroke="currentColor" stroke-width="0.8"/>
+// Compass SVG icon for the map plugin selector (16x16)
+const MAP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="-40 -40 592 592" fill="none" stroke="currentColor" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="256" cy="256" r="200"/>
+  <line x1="256" y1="56" x2="256" y2="96"/>
+  <line x1="256" y1="416" x2="256" y2="456"/>
+  <line x1="56" y1="256" x2="96" y2="256"/>
+  <line x1="416" y1="256" x2="456" y2="256"/>
+  <g transform="rotate(45, 256, 256)">
+    <polygon points="256,146 300,256 212,256" fill="none" stroke="currentColor" stroke-width="12"/>
+    <polygon points="256,366 300,256 212,256" fill="currentColor" stroke="currentColor" stroke-width="12"/>
+  </g>
 </svg>`;
 const MAP_ICON_B64 = 'data:image/svg+xml;base64,' + btoa(MAP_ICON_SVG);
 

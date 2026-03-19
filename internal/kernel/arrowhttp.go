@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -25,6 +26,13 @@ import (
 )
 
 const maxArrowRows = 5_000_000
+
+var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// isValidQueryID checks that the string is a valid lowercase UUID.
+func isValidQueryID(s string) bool {
+	return uuidRe.MatchString(s)
+}
 
 // ArrowServer serves Arrow IPC files over HTTP directly from the spool.
 // Also serves static assets (perspective JS/WASM) for VS Code renderer.
@@ -54,6 +62,9 @@ func NewArrowServer(sp *spool.Spool, introspector *engine.Introspector) (*ArrowS
 	mux.HandleFunc("/arrow/stream", as.handleArrowStream)
 	mux.HandleFunc("/introspect", as.handleIntrospect)
 	mux.HandleFunc("/spool/delete", as.handleSpoolDelete)
+	mux.HandleFunc("/spool/pin", as.handleSpoolPin)
+	mux.HandleFunc("/spool/unpin", as.handleSpoolUnpin)
+	mux.HandleFunc("/spool/is_pinned", as.handleSpoolIsPinned)
 
 	// Serve perspective static files if available.
 	// Look next to the binary: <binary_dir>/static/perspective/
@@ -66,7 +77,16 @@ func NewArrowServer(sp *spool.Spool, introspector *engine.Introspector) (*ArrowS
 		}
 	}
 
-	as.server = &http.Server{Handler: mux}
+	// Wrap all handlers with CORS headers (needed for cross-origin fetch from JupyterLab)
+	as.server = &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})}
 
 	go func() {
 		if err := as.server.Serve(ln); err != nil && err != http.ErrServerClosed {
@@ -94,6 +114,10 @@ func (as *ArrowServer) handleArrow(w http.ResponseWriter, r *http.Request) {
 	queryID := r.URL.Query().Get("q")
 	if queryID == "" {
 		http.Error(w, "missing q parameter", http.StatusBadRequest)
+		return
+	}
+	if !isValidQueryID(queryID) {
+		http.Error(w, "invalid query ID", http.StatusBadRequest)
 		return
 	}
 
@@ -129,6 +153,10 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 	queryID := r.URL.Query().Get("q")
 	if queryID == "" {
 		http.Error(w, "missing q parameter", http.StatusBadRequest)
+		return
+	}
+	if !isValidQueryID(queryID) {
+		http.Error(w, "invalid query ID", http.StatusBadRequest)
 		return
 	}
 
@@ -364,6 +392,11 @@ func (as *ArrowServer) handleSpoolDelete(w http.ResponseWriter, r *http.Request)
 		json.NewEncoder(w).Encode(map[string]string{"error": "missing query_id parameter"})
 		return
 	}
+	if !isValidQueryID(queryID) {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid query_id"})
+		return
+	}
 
 	if err := as.spool.Remove(queryID); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -414,9 +447,106 @@ func (as *ArrowServer) spoolFiles() ([]map[string]any, error) {
 			"query_id":   queryID,
 			"size_bytes": f.size,
 			"created_at": f.modTime.UTC().Format(time.RFC3339),
+			"pinned":     as.spool.IsPinned(queryID),
 		}
 	}
 	return results, nil
+}
+
+// handleSpoolPin copies a spool file to the persistent directory.
+// POST /spool/pin?query_id=...
+func (as *ArrowServer) handleSpoolPin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	queryID := r.URL.Query().Get("query_id")
+	if queryID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "missing query_id parameter"})
+		return
+	}
+	if !isValidQueryID(queryID) {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid query_id"})
+		return
+	}
+
+	if err := as.spool.Pin(queryID); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// handleSpoolUnpin moves a pinned file back to volatile storage.
+// POST /spool/unpin?query_id=...
+func (as *ArrowServer) handleSpoolUnpin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	queryID := r.URL.Query().Get("query_id")
+	if queryID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "missing query_id parameter"})
+		return
+	}
+	if !isValidQueryID(queryID) {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid query_id"})
+		return
+	}
+
+	if err := as.spool.Unpin(queryID); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// handleSpoolIsPinned checks if a query result is pinned.
+// GET /spool/is_pinned?query_id=...
+func (as *ArrowServer) handleSpoolIsPinned(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	queryID := r.URL.Query().Get("query_id")
+	if queryID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "missing query_id parameter"})
+		return
+	}
+	if !isValidQueryID(queryID) {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid query_id"})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{"pinned": as.spool.IsPinned(queryID)})
 }
 
 // ArrowURL returns the URL for fetching the given query's Arrow data.
