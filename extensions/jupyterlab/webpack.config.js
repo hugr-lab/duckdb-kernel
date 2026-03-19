@@ -57,6 +57,12 @@ module.exports = {
         pspAsset('client/dist/wasm/perspective-js.wasm'),
         pspAsset('server/dist/wasm/perspective-server.wasm'),
         pspAsset('viewer/dist/wasm/perspective-viewer.wasm'),
+        // Source maps
+        pspAsset('client/dist/cdn/perspective.js.map'),
+        pspAsset('client/dist/cdn/perspective-server.worker.js.map'),
+        pspAsset('viewer/dist/cdn/perspective-viewer.js.map'),
+        pspAsset('viewer-datagrid/dist/cdn/perspective-viewer-datagrid.js.map'),
+        pspAsset('viewer-d3fc/dist/cdn/perspective-viewer-d3fc.js.map'),
         // CSS themes
         pspAsset('viewer/dist/css/themes.css'),
         // Icons

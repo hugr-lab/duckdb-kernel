@@ -1100,7 +1100,12 @@ function pathLength(coords: number[][]): number {
 /** Format a tooltip from feature properties, with optional measurement info. */
 function formatTooltip(feature: FeatureRow): string {
   const parts: string[] = [];
-  const entries = Object.entries(feature.properties).filter(([, v]) => v !== null && v !== undefined);
+  const tooltipCols = feature.properties.__tooltipColumns as string[] | undefined;
+  let entries = Object.entries(feature.properties).filter(([k, v]) => v !== null && v !== undefined && k !== '__tooltipColumns');
+  if (tooltipCols && tooltipCols.length > 0) {
+    const allowed = new Set(tooltipCols);
+    entries = entries.filter(([k]) => allowed.has(k));
+  }
   if (entries.length > 0) {
     parts.push(...entries.map(([k, v]) => `<b>${escHtml(k)}</b>: ${escHtml(String(v))}`));
   }
@@ -1208,7 +1213,6 @@ function buildMappedLayers(
   heightAccessor: ((d: FeatureRow) => number) | null,
 ): any[] {
   const layers: any[] = [];
-  const defaultColor = FILL_COLOR;
 
   const points = features.filter(f => f.position);
   const lines = features.filter(f => f.path);
@@ -1220,9 +1224,9 @@ function buildMappedLayers(
       id: 'hugr-map-points',
       data: points,
       getPosition: (d: FeatureRow) => d.position!,
-      getFillColor: colorAccessor || defaultColor,
+      getFillColor: colorAccessor || currentDefaultColor,
       getLineColor: STROKE_COLOR,
-      getRadius: sizeAccessor || 6,
+      getRadius: sizeAccessor || currentDefaultSize,
       radiusUnits: 'pixels' as any,
       radiusMinPixels: 2,
       radiusMaxPixels: 40,
@@ -1231,8 +1235,8 @@ function buildMappedLayers(
       opacity: currentOpacity,
       pickable: true,
       updateTriggers: {
-        getFillColor: [colorAccessor],
-        getRadius: [sizeAccessor],
+        getFillColor: [colorAccessor, currentDefaultColor],
+        getRadius: [sizeAccessor, currentDefaultSize],
       },
     }));
   }
@@ -1242,15 +1246,15 @@ function buildMappedLayers(
       id: 'hugr-map-lines',
       data: lines,
       getPath: (d: FeatureRow) => d.path! as any,
-      getColor: colorAccessor || defaultColor,
-      getWidth: sizeAccessor || 2,
+      getColor: colorAccessor || currentDefaultColor,
+      getWidth: sizeAccessor || Math.max(1, currentDefaultSize / 3),
       widthUnits: 'pixels' as any,
       widthMinPixels: 1,
       opacity: currentOpacity,
       pickable: true,
       updateTriggers: {
-        getColor: [colorAccessor],
-        getWidth: [sizeAccessor],
+        getColor: [colorAccessor, currentDefaultColor],
+        getWidth: [sizeAccessor, currentDefaultSize],
       },
     }));
   }
@@ -1261,7 +1265,7 @@ function buildMappedLayers(
       id: 'hugr-map-polygons',
       data: polygons,
       getPolygon: (d: FeatureRow) => d.polygon! as any,
-      getFillColor: colorAccessor || defaultColor,
+      getFillColor: colorAccessor || currentDefaultColor,
       getLineColor: STROKE_COLOR,
       getElevation: heightAccessor || 0,
       extruded,
@@ -1269,7 +1273,7 @@ function buildMappedLayers(
       pickable: true,
       filled: true,
       updateTriggers: {
-        getFillColor: [colorAccessor],
+        getFillColor: [colorAccessor, currentDefaultColor],
         getElevation: [heightAccessor],
       },
     }));
@@ -1280,14 +1284,14 @@ function buildMappedLayers(
       id: 'hugr-map-h3',
       data: h3Cells,
       getHexagon: (d: FeatureRow) => d.h3Index!,
-      getFillColor: colorAccessor || H3_FILL_COLOR,
+      getFillColor: colorAccessor || currentDefaultColor,
       getLineColor: STROKE_COLOR,
       getElevation: heightAccessor || 0,
       extruded: !!heightAccessor,
       opacity: currentOpacity,
       pickable: true,
       updateTriggers: {
-        getFillColor: [colorAccessor],
+        getFillColor: [colorAccessor, currentDefaultColor],
         getElevation: [heightAccessor],
       },
     }));
@@ -1726,8 +1730,8 @@ export async function registerMapPlugin(): Promise<void> {
           const neededCols = [geomColName, colorColName, sizeColName, heightColName, ...tooltipColNames]
             .filter((c): c is string => c != null);
           const uniqueCols = [...new Set(neededCols)];
-          // TODO: column projection disabled temporarily — nested GeoArrow types may break with projectColumns
-          const params = `geoarrow=1`;
+          const colsParam = uniqueCols.length > 0 ? `&columns=${uniqueCols.map(encodeURIComponent).join(',')}` : '';
+          const params = `geoarrow=1${colsParam}`;
           geoArrowUrl = arrowUrl + (arrowUrl.includes('?') ? '&' : '?') + params;
         }
         let geoData: GeoArrowData | null = null;
@@ -1783,7 +1787,7 @@ export async function registerMapPlugin(): Promise<void> {
             ? buildColorAccessor(features, colorColName, schema[colorColName] || 'string')
             : null;
           const sizeAcc = sizeColName
-            ? buildSizeAccessor(features, sizeColName, 3, 25)
+            ? buildSizeAccessor(features, sizeColName, currentSizeRange[0], currentSizeRange[1])
             : null;
           const heightAcc = heightColName
             ? buildSizeAccessor(features, heightColName, 0, 50000)
@@ -1803,9 +1807,7 @@ export async function registerMapPlugin(): Promise<void> {
           }
 
           this._renderDeck(colorAcc, sizeAcc, heightAcc);
-          // Hide legend for WKB fallback (no GeoArrow data for legend)
-          const legendEl = this.shadowRoot?.getElementById('legend');
-          if (legendEl) legendEl.style.display = 'none';
+          this._updateLegend(colorColName, colorColName ? schema[colorColName] || 'string' : 'string', null, features);
         }
       } catch (err) {
         console.error('[map-plugin] draw error:', err);
@@ -1986,24 +1988,35 @@ export async function registerMapPlugin(): Promise<void> {
     }
 
     /** Update legend overlay based on current color accessor data. */
-    private _updateLegend(colorColName: string | null, colType: string, geoData: GeoArrowData | null) {
+    private _updateLegend(colorColName: string | null, colType: string, geoData: GeoArrowData | null, features?: FeatureRow[]) {
       const legend = this.shadowRoot?.getElementById('legend');
       if (!legend) return;
 
-      if (!colorColName || !geoData) {
+      if (!colorColName) {
         legend.style.display = 'none';
         return;
       }
 
-      const colIdx = geoData.table.schema.fields.findIndex((f: any) => f.name === colorColName);
-      if (colIdx === -1) { legend.style.display = 'none'; return; }
-      const values = geoData.table.propColData?.get(colIdx);
-      if (!values || values.length === 0) { legend.style.display = 'none'; return; }
+      // Collect values from GeoArrow data or from parsed features
+      let values: any[] | null = null;
+      if (geoData) {
+        const colIdx = geoData.table.schema.fields.findIndex((f: any) => f.name === colorColName);
+        if (colIdx !== -1) {
+          values = geoData.table.propColData?.get(colIdx) ?? null;
+        }
+      } else if (features && features.length > 0) {
+        values = features.map(f => f.properties[colorColName]);
+      }
+
+      if (!values || values.length === 0) {
+        legend.style.display = 'none';
+        return;
+      }
 
       legend.style.display = '';
 
       if (colType === 'string' || colType === 'boolean') {
-        // Categorical legend — insertion order matches buildBinaryColorAccessor
+        // Categorical legend
         const valMap = new Map<string, number>(); // value → first-seen index
         const counts = new Map<string, number>();
         for (const v of values) {
