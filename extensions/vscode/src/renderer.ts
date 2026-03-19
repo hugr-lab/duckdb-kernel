@@ -96,12 +96,30 @@ function parseTruncation(arrowUrl: string): {
 
 function buildFullUrl(arrowUrl: string): string {
   try {
-    const url = new URL(arrowUrl);
+    // First rebuild with current base URL (handles port changes after reload)
+    const rebuilt = rebuildArrowUrl(arrowUrl);
+    const url = new URL(rebuilt);
     url.searchParams.delete('limit');
     url.searchParams.delete('total');
     return url.toString();
   } catch {
     return arrowUrl;
+  }
+}
+
+/** Rebuild Arrow URL using the latest known kernel base URL.
+ *  Extracts queryID from old URL and builds new URL with current port. */
+function rebuildArrowUrl(oldUrl: string, baseUrl?: string): string {
+  const base = baseUrl || _lastKnownBaseUrl;
+  if (!base) return oldUrl;
+  try {
+    const old = new URL(oldUrl);
+    const q = old.searchParams.get('q');
+    if (!q) return oldUrl;
+    // Build new URL with same path and params but different host:port
+    return `${base}${old.pathname}?q=${q}`;
+  } catch {
+    return oldUrl;
   }
 }
 
@@ -121,7 +139,27 @@ async function streamArrowToTable(
   perspectiveWorker: any,
   signal?: AbortSignal,
 ): Promise<any> {
-  const response = await fetch(arrowUrl, { signal });
+  // Try fetch, retry with rebuilt URL on connection error (port may have changed after reload)
+  const url = rebuildArrowUrl(arrowUrl);
+  let response: Response;
+  try {
+    response = await fetch(url, { signal });
+  } catch {
+    // Connection error — wait for kernel base URL discovery, then retry
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+      const rebuilt = rebuildArrowUrl(arrowUrl);
+      if (rebuilt !== arrowUrl) {
+        try {
+          response = await fetch(rebuilt, { signal });
+          break;
+        } catch { /* retry */ }
+      }
+    }
+    if (!response!) {
+      throw new Error(`Result unavailable. Re-run the cell to refresh.`);
+    }
+  }
   if (!response.ok) {
     throw new Error(`Failed to fetch Arrow data (HTTP ${response.status})`);
   }
@@ -459,9 +497,48 @@ function injectStyles(): void {
       color: var(--vscode-descriptionForeground);
       font-style: italic;
     }
+    .hugr-pin-btn {
+      padding: 2px 8px;
+      font-size: 11px;
+      cursor: pointer;
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+      border: 1px solid var(--vscode-button-secondaryBackground);
+      border-radius: 2px;
+    }
+    .hugr-pin-btn:hover {
+      background: var(--vscode-button-secondaryHoverBackground);
+    }
+    .hugr-pin-btn-active {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      border-color: var(--vscode-button-background);
+    }
+    .hugr-pin-btn-active:hover {
+      background: var(--vscode-button-hoverBackground);
+    }
+    .hugr-pin-btn:disabled {
+      opacity: 0.5;
+      cursor: wait;
+    }
+    .hugr-result-expired {
+      padding: 16px 20px;
+      color: var(--vscode-editorWarning-foreground, #cca700);
+      font-size: 13px;
+      text-align: center;
+      border: 1px dashed var(--vscode-editorWarning-foreground, #cca700);
+      border-radius: 4px;
+      margin: 8px;
+    }
   `;
   document.head.appendChild(style);
 }
+
+/** Cache of last known kernel base URL — updated on each execute result. */
+let _lastKnownBaseUrl: string | null = null;
+
+/** Previous query IDs per output — used for spool cleanup on re-run. */
+const outputPrevQueryIds = new Map<string, string[]>();
 
 // Track active AbortControllers per output
 const outputControllers = new Map<string, AbortController[]>();
@@ -506,9 +583,43 @@ export const activate: ActivationFunction = (context) => {
         return;
       }
 
+      // Cache kernel base URL for URL rebuilding on page reload
+      if (metadata.base_url) {
+        _lastKnownBaseUrl = metadata.base_url;
+      }
+      const baseUrl = metadata.base_url || _lastKnownBaseUrl;
+
+      // Collect previous query IDs for cleanup after new render completes
+      const oldQueryIds = outputPrevQueryIds.get(outputId) || [];
+
+      // Track current query IDs for cleanup on next re-run
+      const newIds: string[] = [];
+      if (metadata.query_id) newIds.push(metadata.query_id);
+      if (metadata.parts) {
+        for (const p of metadata.parts) {
+          if (p.arrow_url) {
+            try { const u = new URL(p.arrow_url); const q = u.searchParams.get('q'); if (q) newIds.push(q); } catch {}
+          }
+        }
+      }
+      if (newIds.length > 0) outputPrevQueryIds.set(outputId, newIds);
+
+      // Restore pin state: check output map first, then module-level set, then ask backend
+      // Pin is disabled in VS Code (kernel CWD is often root)
+
+      // Cleanup function: delete old spool files on re-run
+      const cleanupOld = () => {
+        if (oldQueryIds.length > 0 && baseUrl) {
+          for (const id of oldQueryIds) {
+            fetch(`${baseUrl}/spool/delete?query_id=${id}`, { method: 'DELETE' }).catch(() => {});
+          }
+        }
+      };
+
       // Multipart response with parts array
       if (metadata.parts && metadata.parts.length > 0) {
         await renderMultipart(element, metadata, outputId);
+        cleanupOld();
         return;
       }
 
@@ -516,7 +627,8 @@ export const activate: ActivationFunction = (context) => {
       if (metadata.arrow_url && metadata.base_url) {
         const controller = new AbortController();
         trackController(outputId, controller);
-        await renderSingleArrow(element, metadata, metadata.arrow_url, controller.signal);
+        await renderSingleArrow(element, metadata, metadata.arrow_url, controller.signal, outputId);
+        cleanupOld();
         return;
       }
 
@@ -524,7 +636,17 @@ export const activate: ActivationFunction = (context) => {
     },
 
     disposeOutputItem(id) {
-      cleanupOutput(id ?? 'default');
+      const outputId = id ?? 'default';
+      cleanupOutput(outputId);
+
+      // Delete spool files when output is removed
+      const queryIds = outputPrevQueryIds.get(outputId);
+      if (queryIds && queryIds.length > 0 && _lastKnownBaseUrl) {
+        for (const qid of queryIds) {
+          fetch(`${_lastKnownBaseUrl}/spool/delete?query_id=${qid}`, { method: 'DELETE' }).catch(() => {});
+        }
+      }
+      outputPrevQueryIds.delete(outputId);
     },
   };
 };
@@ -824,6 +946,8 @@ async function renderArrowPart(
       banner.appendChild(openBtn);
     }
 
+    // Pin button hidden in VS Code (kernel CWD is often root, persistent dir unavailable)
+
     container.appendChild(banner);
   }
 
@@ -838,7 +962,7 @@ async function renderArrowPart(
     trackController(outputId, controller);
 
     const client = await perspective.worker();
-    const table = await streamArrowToTable(part.arrow_url, client, controller.signal);
+    const table = await streamArrowToTable(rebuildArrowUrl(part.arrow_url!), client, controller.signal);
 
     if (controller.signal.aborted) {
       if (table) await table.delete();
@@ -880,7 +1004,15 @@ async function renderArrowPart(
     }
   } catch (err: any) {
     loading.remove();
-    container.appendChild(makeError(`Failed to load Arrow data: ${err?.message || 'Unknown error'}`));
+    const msg = err?.message || 'Unknown error';
+    if (msg.includes('fetch') || msg.includes('Failed to fetch') || msg.includes('ERR_')) {
+      const div = document.createElement('div');
+      div.className = 'hugr-result-expired';
+      div.textContent = 'Result unavailable. Run the cell to load data.';
+      container.appendChild(div);
+    } else {
+      container.appendChild(makeError(`Failed to load Arrow data: ${msg}`));
+    }
   }
 }
 
@@ -1340,9 +1472,11 @@ async function renderSingleArrow(
   metadata: FlatMetadata & { base_url?: string },
   arrowUrl: string,
   signal: AbortSignal,
+  outputId?: string,
 ): Promise<void> {
   const truncation = parseTruncation(arrowUrl);
   const baseUrl = (metadata as any).base_url;
+  const resolvedArrowUrl = rebuildArrowUrl(arrowUrl);
 
   element.innerHTML =
     '<div class="hugr-result-loading">Loading viewer...</div>';
@@ -1353,7 +1487,7 @@ async function renderSingleArrow(
     if (signal.aborted) return;
 
     const client = await perspective.worker();
-    const table = await streamArrowToTable(arrowUrl, client, signal);
+    const table = await streamArrowToTable(resolvedArrowUrl, client, signal);
 
     if (signal.aborted) {
       if (table) await table.delete();
@@ -1394,7 +1528,7 @@ async function renderSingleArrow(
           btn.textContent = 'Loading...';
           const newController = new AbortController();
           trackController('load-all', newController);
-          renderSingleArrow(element, metadata, buildFullUrl(arrowUrl), newController.signal);
+          renderSingleArrow(element, metadata, buildFullUrl(arrowUrl), newController.signal, outputId);
         });
         banner.appendChild(btn);
       }
@@ -1413,6 +1547,9 @@ async function renderSingleArrow(
         });
         banner.appendChild(openBtn);
       }
+
+      // Pin/Unpin toggle button
+      // Pin button hidden in VS Code (kernel CWD is often root, persistent dir unavailable)
 
       element.appendChild(banner);
     }
@@ -1437,17 +1574,25 @@ async function renderSingleArrow(
     if (tileSources && tileSources.length > 0) {
       viewer.setAttribute('data-tile-sources', JSON.stringify(tileSources));
     }
-    viewer.setAttribute('data-arrow-url', arrowUrl);
+    viewer.setAttribute('data-arrow-url', resolvedArrowUrl);
 
     await (viewer as any).load(table);
 
     // After load, notify map plugin about geometry metadata
     const mapPlugin = viewer.querySelector('perspective-viewer-map') as any;
     if (mapPlugin && mapPlugin.setGeometryMeta) {
-      mapPlugin.setGeometryMeta(geoCols || [], tileSources || [], arrowUrl);
+      mapPlugin.setGeometryMeta(geoCols || [], tileSources || [], resolvedArrowUrl);
     }
   } catch (err: any) {
     if (signal.aborted) return;
-    element.replaceChildren(makeError(`Failed to initialize viewer: ${err?.message || 'Unknown error'}`));
+    const msg = err?.message || 'Unknown error';
+    if (msg.includes('fetch') || msg.includes('Failed to fetch') || msg.includes('ERR_')) {
+      const div = document.createElement('div');
+      div.className = 'hugr-result-expired';
+      div.textContent = 'Result unavailable. Run the cell to load data.';
+      element.replaceChildren(div);
+    } else {
+      element.replaceChildren(makeError(`Failed to initialize viewer: ${msg}`));
+    }
   }
 }

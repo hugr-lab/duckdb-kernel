@@ -175,10 +175,15 @@ func (s *Spool) Remove(queryID string) error {
 }
 
 // Pin copies an Arrow file from volatile dir to persistent dir.
+// Idempotent: returns nil if already pinned.
 // Creates persistent dir and .gitignore if needed.
 func (s *Spool) Pin(queryID string) error {
 	if s.PersistentDir == "" {
 		return fmt.Errorf("persistent dir not configured")
+	}
+	// Already pinned — nothing to do
+	if s.IsPinned(queryID) {
+		return nil
 	}
 	src := s.Path(queryID)
 	if _, err := os.Stat(src); err != nil {

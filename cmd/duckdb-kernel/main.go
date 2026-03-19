@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -80,9 +81,10 @@ func main() {
 	}
 
 	// Set persistent dir for pinned results (CWD/duckdb-results/)
+	// Skip if CWD is root (e.g. VS Code launches kernel with CWD=/)
 	if sp != nil {
-		if cwd, err := os.Getwd(); err == nil {
-			sp.PersistentDir = cwd + "/duckdb-results"
+		if cwd, err := os.Getwd(); err == nil && cwd != "/" {
+			sp.PersistentDir = filepath.Join(cwd, "duckdb-results")
 		}
 	}
 
