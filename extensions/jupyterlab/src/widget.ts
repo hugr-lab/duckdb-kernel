@@ -311,13 +311,10 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       _lastKnownBaseUrl = metadata.base_url;
     }
 
-    // Delete previous spool file when cell is re-run (old result no longer needed)
-    if (this._prevQueryIds.length > 0 && metadata.base_url) {
-      for (const oldId of this._prevQueryIds) {
-        fetch(`${metadata.base_url}/spool/delete?query_id=${oldId}`, { method: 'DELETE' }).catch(() => {});
-      }
-      this._prevQueryIds = [];
-    }
+    // Collect previous query IDs for cleanup after new render completes
+    const oldQueryIds = this._prevQueryIds;
+    const baseUrl = metadata.base_url || _lastKnownBaseUrl;
+
     // Track current query IDs for cleanup on next re-run
     const newIds: string[] = [];
     if (metadata.query_id) newIds.push(metadata.query_id);
@@ -330,15 +327,26 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
     }
     if (newIds.length > 0) this._prevQueryIds = newIds;
 
+    // Render and then clean up old spool files
+    const cleanupOld = () => {
+      if (oldQueryIds.length > 0 && baseUrl) {
+        for (const id of oldQueryIds) {
+          fetch(`${baseUrl}/spool/delete?query_id=${id}`, { method: 'DELETE' }).catch(() => {});
+        }
+      }
+    };
+
     // Multipart response with parts array
     if (metadata.parts && metadata.parts.length > 0) {
       await this._renderMultipart(metadata);
+      cleanupOld();
       return;
     }
 
     // Backward-compatible: single Arrow result via flat fields
     if (metadata.arrow_url) {
       await this._renderSingleArrow(metadata);
+      cleanupOld();
       return;
     }
 
