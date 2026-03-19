@@ -230,15 +230,12 @@ class TestSQLExecution:
 
 class TestArrowSpool:
     def test_arrow_files_written(self, kernel):
-        """Query results should produce Arrow IPC files in the spool directory."""
+        """Query results should produce Arrow IPC files in the flat spool directory."""
         displays, errors, _ = execute(kernel, "SELECT 1 AS val")
         assert not errors
         spool_base = os.path.join(tempfile.gettempdir(), "duckdb-kernel")
         assert os.path.exists(spool_base), f"Spool directory not found: {spool_base}"
-        sessions = os.listdir(spool_base)
-        assert len(sessions) > 0, "No session directories in spool"
-        session_dir = os.path.join(spool_base, sessions[0])
-        arrow_files = [f for f in os.listdir(session_dir) if f.endswith(".arrow")]
+        arrow_files = [f for f in os.listdir(spool_base) if f.endswith(".arrow")]
         assert len(arrow_files) > 0, "Expected at least one .arrow file in spool"
 
 
