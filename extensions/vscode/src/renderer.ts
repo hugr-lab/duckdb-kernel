@@ -139,26 +139,19 @@ async function streamArrowToTable(
   perspectiveWorker: any,
   signal?: AbortSignal,
 ): Promise<any> {
-  // Try fetch, retry with rebuilt URL on connection error (port may have changed after reload)
   const url = rebuildArrowUrl(arrowUrl);
+
+  // If no base URL known yet (fresh reload, kernel not started), skip fetch entirely
+  // to avoid noisy ECONNREFUSED errors in VS Code UI
+  if (!_lastKnownBaseUrl) {
+    throw new Error('Result unavailable. Run the cell to load data.');
+  }
+
   let response: Response;
   try {
     response = await fetch(url, { signal });
   } catch {
-    // Connection error — wait for kernel base URL discovery, then retry
-    for (let attempt = 0; attempt < 3; attempt++) {
-      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
-      const rebuilt = rebuildArrowUrl(arrowUrl);
-      if (rebuilt !== arrowUrl) {
-        try {
-          response = await fetch(rebuilt, { signal });
-          break;
-        } catch { /* retry */ }
-      }
-    }
-    if (!response!) {
-      throw new Error(`Result unavailable. Re-run the cell to refresh.`);
-    }
+    throw new Error('Result unavailable. Run the cell to load data.');
   }
   if (!response.ok) {
     throw new Error(`Failed to fetch Arrow data (HTTP ${response.status})`);
@@ -939,8 +932,10 @@ async function renderArrowPart(
         _rendererMessaging!.postMessage({
           type: 'open-in-tab',
           arrow_url: buildFullUrl(part.arrow_url!),
-          base_url: metadata.base_url,
+          base_url: _lastKnownBaseUrl || metadata.base_url,
           title: part.title || part.id || 'Result',
+          geometry_columns: part.geometry_columns || [],
+          tile_sources: part.tile_sources || [],
         });
       });
       banner.appendChild(openBtn);
@@ -949,6 +944,15 @@ async function renderArrowPart(
     // Pin button hidden in VS Code (kernel CWD is often root, persistent dir unavailable)
 
     container.appendChild(banner);
+  }
+
+  // Skip loading if kernel hasn't responded in this session (avoids ECONNREFUSED noise)
+  if (!_lastKnownBaseUrl) {
+    const div = document.createElement('div');
+    div.className = 'hugr-result-expired';
+    div.textContent = 'Result unavailable. Run the cell to load data.';
+    container.appendChild(div);
+    return;
   }
 
   const loading = document.createElement('div');
@@ -1478,6 +1482,15 @@ async function renderSingleArrow(
   const baseUrl = (metadata as any).base_url;
   const resolvedArrowUrl = rebuildArrowUrl(arrowUrl);
 
+  // Skip loading if kernel hasn't responded in this session (avoids ECONNREFUSED noise)
+  if (!_lastKnownBaseUrl) {
+    const div = document.createElement('div');
+    div.className = 'hugr-result-expired';
+    div.textContent = 'Result unavailable. Run the cell to load data.';
+    element.replaceChildren(div);
+    return;
+  }
+
   element.innerHTML =
     '<div class="hugr-result-loading">Loading viewer...</div>';
 
@@ -1533,7 +1546,7 @@ async function renderSingleArrow(
         banner.appendChild(btn);
       }
 
-      if (_rendererMessaging && (metadata as any).base_url) {
+      if (_rendererMessaging && (_lastKnownBaseUrl || (metadata as any).base_url)) {
         const openBtn = document.createElement('button');
         openBtn.className = 'hugr-result-load-all';
         openBtn.textContent = 'Open in Tab';
@@ -1541,8 +1554,10 @@ async function renderSingleArrow(
           _rendererMessaging!.postMessage({
             type: 'open-in-tab',
             arrow_url: buildFullUrl(arrowUrl),
-            base_url: (metadata as any).base_url,
+            base_url: _lastKnownBaseUrl || (metadata as any).base_url,
             title: metadata.query_id || 'Result',
+            geometry_columns: metadata.geometry_columns || [],
+            tile_sources: metadata.tile_sources || [],
           });
         });
         banner.appendChild(openBtn);

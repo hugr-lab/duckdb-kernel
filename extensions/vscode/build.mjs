@@ -20,3 +20,13 @@ await esbuild.build({
   format: 'esm',
   sourcemap: true,
 });
+
+// Map plugin bundle for perspective panel webview (IIFE, self-registering)
+await esbuild.build({
+  entryPoints: ['src/map-plugin-standalone.ts'],
+  bundle: true,
+  outfile: 'out/map-plugin.js',
+  platform: 'browser',
+  format: 'iife',
+  sourcemap: true,
+});
