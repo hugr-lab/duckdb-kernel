@@ -116,8 +116,9 @@ function rebuildArrowUrl(oldUrl: string, baseUrl?: string): string {
     const old = new URL(oldUrl);
     const q = old.searchParams.get('q');
     if (!q) return oldUrl;
-    // Build new URL with same path and params but different host:port
-    return `${base}${old.pathname}?q=${q}`;
+    const rebuilt = new URL(`${base}${old.pathname}`);
+    old.searchParams.forEach((v, k) => rebuilt.searchParams.set(k, v));
+    return rebuilt.toString();
   } catch {
     return oldUrl;
   }

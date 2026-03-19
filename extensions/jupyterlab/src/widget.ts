@@ -167,26 +167,12 @@ function rebuildArrowUrl(oldUrl: string, baseUrl?: string): string {
     const old = new URL(oldUrl);
     const q = old.searchParams.get('q');
     if (!q) return oldUrl;
-    // Build new URL with same path and params but different host:port
-    return `${base}${old.pathname}?q=${q}`;
+    const rebuilt = new URL(`${base}${old.pathname}`);
+    old.searchParams.forEach((v, k) => rebuilt.searchParams.set(k, v));
+    return rebuilt.toString();
   } catch {
     return oldUrl;
   }
-}
-
-/** Fetch Arrow data with retry — on connection error, try with rebuilt URL. */
-async function fetchArrowWithRetry(url: string, baseUrl?: string): Promise<Response> {
-  try {
-    const resp = await fetch(url);
-    if (resp.ok) return resp;
-  } catch {
-    // Connection error — try with rebuilt URL
-  }
-  const rebuilt = rebuildArrowUrl(url, baseUrl);
-  if (rebuilt !== url) {
-    return fetch(rebuilt);
-  }
-  throw new Error(`Failed to fetch Arrow data from ${url}`);
 }
 
 /** Escape HTML to prevent XSS in innerHTML. */
@@ -205,7 +191,7 @@ async function streamArrowToTable(
   signal?: AbortSignal,
 ): Promise<any> {
   // Try fetch, retry with rebuilt URL on connection error (port may have changed after reload)
-  let response: Response;
+  let response: Response | undefined;
   try {
     response = await fetch(arrowUrl, { signal });
   } catch {
@@ -220,7 +206,7 @@ async function streamArrowToTable(
         } catch { /* retry */ }
       }
     }
-    if (!response!) {
+    if (!response) {
       throw new Error(`Result unavailable. Re-run the cell to refresh.`);
     }
   }

@@ -84,9 +84,9 @@ function buildPerspectiveHtml(metadata: {
     content="default-src 'none';
       script-src 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:* http://localhost:* https://*.vscode-resource.vscode-cdn.net;
       style-src 'unsafe-inline' http://127.0.0.1:* http://localhost:*;
-      connect-src http://127.0.0.1:* http://localhost:* https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org https://*;
+      connect-src http://127.0.0.1:* http://localhost:* https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org https://*.tiles.mapbox.com;
       font-src http://127.0.0.1:* http://localhost:*;
-      img-src http://127.0.0.1:* http://localhost:* https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org https://* data:;
+      img-src http://127.0.0.1:* http://localhost:* https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org https://*.tiles.mapbox.com data:;
       worker-src blob:;">
   <style>
     html, body {

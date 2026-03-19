@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -25,6 +26,13 @@ import (
 )
 
 const maxArrowRows = 5_000_000
+
+var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// isValidQueryID checks that the string is a valid lowercase UUID.
+func isValidQueryID(s string) bool {
+	return uuidRe.MatchString(s)
+}
 
 // ArrowServer serves Arrow IPC files over HTTP directly from the spool.
 // Also serves static assets (perspective JS/WASM) for VS Code renderer.
@@ -108,6 +116,10 @@ func (as *ArrowServer) handleArrow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing q parameter", http.StatusBadRequest)
 		return
 	}
+	if !isValidQueryID(queryID) {
+		http.Error(w, "invalid query ID", http.StatusBadRequest)
+		return
+	}
 
 	path := as.spool.Path(queryID)
 	if _, err := os.Stat(path); err != nil {
@@ -141,6 +153,10 @@ func (as *ArrowServer) handleArrowStream(w http.ResponseWriter, r *http.Request)
 	queryID := r.URL.Query().Get("q")
 	if queryID == "" {
 		http.Error(w, "missing q parameter", http.StatusBadRequest)
+		return
+	}
+	if !isValidQueryID(queryID) {
+		http.Error(w, "invalid query ID", http.StatusBadRequest)
 		return
 	}
 
@@ -376,6 +392,11 @@ func (as *ArrowServer) handleSpoolDelete(w http.ResponseWriter, r *http.Request)
 		json.NewEncoder(w).Encode(map[string]string{"error": "missing query_id parameter"})
 		return
 	}
+	if !isValidQueryID(queryID) {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid query_id"})
+		return
+	}
 
 	if err := as.spool.Remove(queryID); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -456,6 +477,11 @@ func (as *ArrowServer) handleSpoolPin(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"error": "missing query_id parameter"})
 		return
 	}
+	if !isValidQueryID(queryID) {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid query_id"})
+		return
+	}
 
 	if err := as.spool.Pin(queryID); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -488,6 +514,11 @@ func (as *ArrowServer) handleSpoolUnpin(w http.ResponseWriter, r *http.Request) 
 		json.NewEncoder(w).Encode(map[string]string{"error": "missing query_id parameter"})
 		return
 	}
+	if !isValidQueryID(queryID) {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid query_id"})
+		return
+	}
 
 	if err := as.spool.Unpin(queryID); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -507,6 +538,11 @@ func (as *ArrowServer) handleSpoolIsPinned(w http.ResponseWriter, r *http.Reques
 	if queryID == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": "missing query_id parameter"})
+		return
+	}
+	if !isValidQueryID(queryID) {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid query_id"})
 		return
 	}
 

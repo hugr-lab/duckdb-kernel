@@ -213,12 +213,18 @@ func (s *Spool) Pin(queryID string) error {
 	if err != nil {
 		return err
 	}
-	defer dstFile.Close()
 
 	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		dstFile.Close()
 		os.Remove(dst)
 		return err
 	}
+
+	if err := dstFile.Sync(); err != nil {
+		dstFile.Close()
+		return err
+	}
+	dstFile.Close()
 
 	// Remove from volatile dir — persistent copy is the source of truth now
 	os.Remove(src)
@@ -247,12 +253,18 @@ func (s *Spool) Unpin(queryID string) error {
 	if err != nil {
 		return err
 	}
-	defer dstFile.Close()
 
 	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		dstFile.Close()
 		os.Remove(dst)
 		return err
 	}
+
+	if err := dstFile.Sync(); err != nil {
+		dstFile.Close()
+		return err
+	}
+	dstFile.Close()
 
 	os.Remove(src)
 	return nil
@@ -304,6 +316,9 @@ func (s *Spool) Cleanup() (int, error) {
 	// Pass 1: delete expired files
 	for _, entry := range entries {
 		if entry.IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(entry.Name(), ".arrow") {
 			continue
 		}
 		info, err := entry.Info()

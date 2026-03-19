@@ -176,15 +176,24 @@ func parseSize(s string, def int64) int64 {
 	}
 	s = strings.TrimSpace(strings.ToLower(s))
 	multiplier := int64(1)
-	if strings.HasSuffix(s, "g") || strings.HasSuffix(s, "gb") {
+	if strings.HasSuffix(s, "gb") {
 		multiplier = 1024 * 1024 * 1024
-		s = strings.TrimRight(s, "gb")
-	} else if strings.HasSuffix(s, "m") || strings.HasSuffix(s, "mb") {
+		s = strings.TrimSuffix(s, "gb")
+	} else if strings.HasSuffix(s, "g") {
+		multiplier = 1024 * 1024 * 1024
+		s = strings.TrimSuffix(s, "g")
+	} else if strings.HasSuffix(s, "mb") {
 		multiplier = 1024 * 1024
-		s = strings.TrimRight(s, "mb")
-	} else if strings.HasSuffix(s, "k") || strings.HasSuffix(s, "kb") {
+		s = strings.TrimSuffix(s, "mb")
+	} else if strings.HasSuffix(s, "m") {
+		multiplier = 1024 * 1024
+		s = strings.TrimSuffix(s, "m")
+	} else if strings.HasSuffix(s, "kb") {
 		multiplier = 1024
-		s = strings.TrimRight(s, "kb")
+		s = strings.TrimSuffix(s, "kb")
+	} else if strings.HasSuffix(s, "k") {
+		multiplier = 1024
+		s = strings.TrimSuffix(s, "k")
 	}
 	n, err := fmt.Sscanf(s, "%d", new(int64))
 	if err != nil || n == 0 {
