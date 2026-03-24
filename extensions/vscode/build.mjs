@@ -30,3 +30,13 @@ await esbuild.build({
   format: 'iife',
   sourcemap: true,
 });
+
+// Perspective panel webview bundle (IIFE, uses perspective-core)
+await esbuild.build({
+  entryPoints: ['src/perspective-panel-webview.ts'],
+  bundle: true,
+  outfile: 'out/perspective-panel.js',
+  platform: 'browser',
+  format: 'iife',
+  sourcemap: true,
+});

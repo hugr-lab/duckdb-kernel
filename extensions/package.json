@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "workspaces": [
+    "perspective-core",
+    "perspective-viewer",
+    "duckdb-explorer",
+    "vscode"
+  ]
+}

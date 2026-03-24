@@ -26,19 +26,32 @@ Thumbs.db
 
 # Node.js / TypeScript (extensions)
 node_modules/
-extensions/jupyterlab/lib/
-extensions/jupyterlab/.yarn/cache/
-extensions/jupyterlab/.yarn/install-state.gz
 *.log
+
+# Yarn cache & state (all extensions)
+**/.yarn/cache/
+**/.yarn/install-state.gz
+.pnp.*
+
+# Extension build outputs
+extensions/perspective-core/lib/
+extensions/perspective-viewer/lib/
+extensions/perspective-viewer/hugr_perspective/labextension/
+extensions/duckdb-explorer/lib/
+extensions/duckdb-explorer/hugr_duckdb_explorer/labextension/
 
 # Python (extensions packaging)
 __pycache__/
 *.pyc
 *.egg-info/
-extensions/jupyterlab/hugr_perspective/labextension/
+dist/
 
 # VS Code extension output
 extensions/vscode/out/
+
+# Spool results
+.duckdb-results/
+duckdb-results/
 
 # Generated static files (perspective)
 static/

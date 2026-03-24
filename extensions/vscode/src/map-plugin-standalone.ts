@@ -2,7 +2,7 @@
  * Standalone map plugin entry point for perspective panel webview.
  * Exposes window.__mapPluginReady promise that resolves when plugin is registered.
  */
-import { registerMapPlugin } from './map-plugin';
+import { registerMapPlugin } from '@hugr-lab/perspective-core';
 
 (window as any).__mapPluginReady = (async () => {
   try {

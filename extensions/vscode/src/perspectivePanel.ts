@@ -1,6 +1,9 @@
 /**
  * Webview panel that displays Perspective viewer with Arrow data
  * in a full-size VS Code editor tab.
+ *
+ * Rendering logic is bundled from @hugr-lab/perspective-core via
+ * perspective-panel-webview.ts → out/perspective-panel.js
  */
 
 import * as vscode from 'vscode';
@@ -32,8 +35,8 @@ export function showPerspectivePanel(metadata: {
     },
   );
 
-  const mapPluginUri = panel.webview.asWebviewUri(
-    vscode.Uri.joinPath(extensionUri, 'out', 'map-plugin.js'),
+  const panelScriptUri = panel.webview.asWebviewUri(
+    vscode.Uri.joinPath(extensionUri, 'out', 'perspective-panel.js'),
   );
 
   activePanels.set(metadata.query_id, panel);
@@ -53,7 +56,6 @@ export function showPerspectivePanel(metadata: {
         filters,
       });
       if (uri) {
-        // msg.data is a base64-encoded string for binary, or plain string for text
         const bytes = msg.binary
           ? Buffer.from(msg.data, 'base64')
           : Buffer.from(msg.data, 'utf-8');
@@ -63,7 +65,7 @@ export function showPerspectivePanel(metadata: {
     }
   });
 
-  panel.webview.html = buildPerspectiveHtml(metadata, mapPluginUri);
+  panel.webview.html = buildPerspectiveHtml(metadata, panelScriptUri);
 }
 
 function buildPerspectiveHtml(metadata: {
@@ -72,9 +74,15 @@ function buildPerspectiveHtml(metadata: {
   base_url: string;
   geometry_columns?: any[];
   tile_sources?: any[];
-}, mapPluginUri: vscode.Uri): string {
+}, panelScriptUri: vscode.Uri): string {
   const staticBase = `${metadata.base_url}/static/perspective`;
-  const arrowUrl = metadata.arrow_url;
+
+  const config = JSON.stringify({
+    staticBase,
+    arrowUrl: metadata.arrow_url,
+    geometryColumns: metadata.geometry_columns || [],
+    tileSources: metadata.tile_sources || [],
+  });
 
   return `<!DOCTYPE html>
 <html lang="en" style="height: 100%; margin: 0;">
@@ -159,208 +167,8 @@ function buildPerspectiveHtml(metadata: {
     <div id="loading">Loading Perspective viewer...</div>
     <div id="error"></div>
   </div>
-  <script src="${mapPluginUri}"><\/script>
-  <script type="module">
-    const vscode = acquireVsCodeApi();
-    const staticBase = ${JSON.stringify(staticBase)};
-    const arrowUrl = ${JSON.stringify(arrowUrl)};
-
-    function concatBuffers(a, b) {
-      const result = new Uint8Array(a.length + b.length);
-      result.set(a);
-      result.set(b, a.length);
-      return result;
-    }
-
-    async function streamArrowToTable(url, worker) {
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error('Failed to fetch Arrow data (HTTP ' + response.status + ')');
-      }
-      if (!response.body) {
-        throw new Error('Response body is null');
-      }
-
-      const reader = response.body.getReader();
-      let buffer = new Uint8Array(0);
-      let table = null;
-
-      try {
-        while (true) {
-          while (buffer.length < 4) {
-            const { done, value } = await reader.read();
-            if (done) return table;
-            buffer = concatBuffers(buffer, value);
-          }
-
-          const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-          const chunkLen = view.getUint32(0, true);
-          if (chunkLen === 0) break;
-
-          while (buffer.length < 4 + chunkLen) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer = concatBuffers(buffer, value);
-          }
-
-          if (buffer.length < 4 + chunkLen) break;
-
-          const chunk = buffer.slice(4, 4 + chunkLen);
-          buffer = buffer.slice(4 + chunkLen);
-
-          if (table === null) {
-            table = await worker.table(chunk.buffer);
-          } else {
-            await table.update(chunk.buffer);
-          }
-        }
-      } finally {
-        reader.releaseLock();
-      }
-
-      return table;
-    }
-
-    async function loadPerspective() {
-      const alreadyLoaded = customElements.get('perspective-viewer') !== undefined;
-      let perspective;
-      if (alreadyLoaded) {
-        perspective = await import(staticBase + '/perspective.js');
-      } else {
-        [perspective] = await Promise.all([
-          import(staticBase + '/perspective.js'),
-          import(staticBase + '/perspective-viewer.js'),
-          import(staticBase + '/perspective-viewer-datagrid.js'),
-          import(staticBase + '/perspective-viewer-d3fc.js'),
-        ]);
-      }
-
-      try {
-        const cssResp = await fetch(staticBase + '/themes.css');
-        if (cssResp.ok) {
-          const cssText = await cssResp.text();
-          const style = document.createElement('style');
-          style.textContent = cssText;
-          document.head.appendChild(style);
-        }
-      } catch {}
-
-      await customElements.whenDefined('perspective-viewer');
-      return perspective;
-    }
-
-    // Convert ArrayBuffer to base64
-    function bufferToBase64(buf) {
-      const bytes = new Uint8Array(buf);
-      let binary = '';
-      for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      return btoa(binary);
-    }
-
-    async function main() {
-      const container = document.getElementById('container');
-      const toolbar = document.getElementById('toolbar');
-      const loadingEl = document.getElementById('loading');
-      const errorEl = document.getElementById('error');
-      const statusEl = document.getElementById('status');
-
-      try {
-        const perspective = await loadPerspective();
-        const client = await perspective.worker();
-        const table = await streamArrowToTable(arrowUrl, client);
-
-        if (!table) {
-          throw new Error('No data received from Arrow stream');
-        }
-
-        loadingEl.style.display = 'none';
-        toolbar.style.display = 'flex';
-
-        const size = await table.size();
-        const schema = await table.schema();
-        const cols = Object.keys(schema).length;
-        statusEl.textContent = size.toLocaleString() + ' rows \\u00b7 ' + cols + ' columns';
-
-        const viewer = document.createElement('perspective-viewer');
-        viewer.setAttribute('plugin', 'Datagrid');
-        viewer.style.cssText = 'flex: 1; width: 100%; height: 100%;';
-        container.appendChild(viewer);
-
-        // Wait for map plugin registration (loaded via script tag in head)
-        if (window.__mapPluginReady) {
-          await window.__mapPluginReady;
-        }
-
-        // Pass geometry metadata for the map plugin
-        const geoCols = ${JSON.stringify(metadata.geometry_columns || [])};
-        const tileSources = ${JSON.stringify(metadata.tile_sources || [])};
-        if (geoCols.length > 0) {
-          viewer.setAttribute('data-geometry-columns', JSON.stringify(geoCols));
-        }
-        if (tileSources.length > 0) {
-          viewer.setAttribute('data-tile-sources', JSON.stringify(tileSources));
-        }
-        if (arrowUrl) {
-          viewer.setAttribute('data-arrow-url', arrowUrl);
-        }
-
-        await viewer.load(table);
-
-        // Save buttons — export from the viewer's current view
-        document.getElementById('save-csv').addEventListener('click', async () => {
-          statusEl.textContent = 'Exporting CSV...';
-          try {
-            const csv = await viewer.getView().then(v => v.to_csv());
-            vscode.postMessage({ type: 'save', format: 'csv', data: csv, binary: false });
-          } catch (e) {
-            // Fallback: export full table
-            const view = await table.view();
-            const csv = await view.to_csv();
-            await view.delete();
-            vscode.postMessage({ type: 'save', format: 'csv', data: csv, binary: false });
-          }
-          statusEl.textContent = size.toLocaleString() + ' rows \\u00b7 ' + cols + ' columns';
-        });
-
-        document.getElementById('save-json').addEventListener('click', async () => {
-          statusEl.textContent = 'Exporting JSON...';
-          try {
-            const json = await viewer.getView().then(v => v.to_json());
-            vscode.postMessage({ type: 'save', format: 'json', data: JSON.stringify(json, null, 2), binary: false });
-          } catch (e) {
-            const view = await table.view();
-            const json = await view.to_json();
-            await view.delete();
-            vscode.postMessage({ type: 'save', format: 'json', data: JSON.stringify(json, null, 2), binary: false });
-          }
-          statusEl.textContent = size.toLocaleString() + ' rows \\u00b7 ' + cols + ' columns';
-        });
-
-        document.getElementById('save-arrow').addEventListener('click', async () => {
-          statusEl.textContent = 'Exporting Arrow...';
-          try {
-            const arrow = await viewer.getView().then(v => v.to_arrow());
-            vscode.postMessage({ type: 'save', format: 'arrow', data: bufferToBase64(arrow), binary: true });
-          } catch (e) {
-            const view = await table.view();
-            const arrow = await view.to_arrow();
-            await view.delete();
-            vscode.postMessage({ type: 'save', format: 'arrow', data: bufferToBase64(arrow), binary: true });
-          }
-          statusEl.textContent = size.toLocaleString() + ' rows \\u00b7 ' + cols + ' columns';
-        });
-
-      } catch (err) {
-        loadingEl.style.display = 'none';
-        errorEl.style.display = 'block';
-        errorEl.textContent = 'Failed to load viewer: ' + (err.message || String(err));
-      }
-    }
-
-    main();
-  </script>
+  <script>window.__perspectivePanelConfig = ${config};<\/script>
+  <script src="${panelScriptUri}"><\/script>
 </body>
 </html>`;
 }

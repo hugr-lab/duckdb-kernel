@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling>=1.5.0", "jupyterlab>=4.0.0,<5", "hatch-nodejs-version>=0.3.2", "hatch-jupyter-builder>=0.5"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hugr-duckdb-explorer"
+version = "0.1.0"
+description = "DuckDB database explorer sidebar for JupyterLab"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+dependencies = ["jupyter_server>=2.14.0"]
+
+[tool.hatch.build]
+artifacts = ["hugr_duckdb_explorer/labextension"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["hugr_duckdb_explorer"]
+ignore-vcs = true
+
+[tool.hatch.build.targets.wheel.shared-data]
+"hugr_duckdb_explorer/labextension" = "share/jupyter/labextensions/@hugr-lab/duckdb-explorer"
+
+[tool.hatch.build.hooks.jupyter-builder]
+dependencies = ["hatch-jupyter-builder>=0.5"]
+build-function = "hatch_jupyter_builder.npm_builder"
+ensured-targets = [
+    "hugr_duckdb_explorer/labextension/static/style.js",
+    "hugr_duckdb_explorer/labextension/package.json",
+]
+skip-if-exists = ["hugr_duckdb_explorer/labextension/static/style.js"]
+
+[tool.hatch.build.hooks.jupyter-builder.build-kwargs]
+build_cmd = "build:prod"
+npm = ["jlpm"]

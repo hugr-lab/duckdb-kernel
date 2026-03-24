@@ -1,0 +1,532 @@
+/**
+ * Shared CSS for HUGR result rendering.
+ *
+ * Uses CSS custom properties with neutral fallback defaults.
+ * Platform extensions (JupyterLab, VS Code) can override these
+ * by setting --hugr-* variables or platform-specific variables.
+ */
+
+/* ===== Result Viewer ===== */
+
+.hugr-result-viewer {
+  width: 100%;
+  min-height: 400px;
+  display: block;
+}
+
+.hugr-result-viewer perspective-viewer {
+  width: 100%;
+  min-height: 400px;
+  display: block;
+}
+
+.hugr-result-loading {
+  padding: 12px 16px;
+  color: #666;
+  font-family: sans-serif;
+  font-size: 13px;
+}
+
+.hugr-result-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  margin-bottom: 4px;
+  background: #fff3e0;
+  border: 1px solid #ffcc80;
+  border-radius: 4px;
+  font-family: sans-serif;
+  font-size: 13px;
+  color: #333;
+}
+
+.hugr-result-load-all {
+  padding: 4px 12px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  background: #fff;
+  color: #333;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hugr-result-load-all:hover {
+  background: #f0f0f0;
+}
+
+.hugr-result-load-all:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+/* Icon buttons (Pin, Open in Tab) */
+
+.hugr-btn-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.hugr-open-tab-btn,
+.hugr-pin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 4px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.hugr-open-tab-btn:hover,
+.hugr-pin-btn:hover {
+  background: #f0f0f0;
+}
+
+.hugr-pin-btn-active {
+  background: #e3f2fd;
+  border-color: #1976d2;
+}
+
+.hugr-pin-btn-active:hover {
+  background: #bbdefb;
+}
+
+.hugr-pin-btn:disabled,
+.hugr-open-tab-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+/* Perspective tab widget */
+.hugr-perspective-tab {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.hugr-perspective-tab perspective-viewer {
+  width: 100%;
+  height: 100%;
+  flex: 1;
+  display: block;
+}
+
+.hugr-result-error {
+  padding: 12px 16px;
+  color: #d32f2f;
+  background: #fce4ec;
+  border: 1px solid #ef9a9a;
+  border-radius: 4px;
+  font-family: sans-serif;
+  font-size: 13px;
+}
+
+/* ===== Multipart Tabs ===== */
+
+.hugr-tabs-wrap {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+
+.hugr-tabs-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid #e0e0e0;
+  background: #f5f5f5;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+}
+
+.hugr-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  background: transparent;
+  color: #666;
+  font-family: sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+  flex-shrink: 0;
+}
+
+.hugr-tab-btn:hover {
+  color: #333;
+  background: #eaeaea;
+}
+
+.hugr-tab-btn-active {
+  color: #1976d2;
+  border-bottom-color: #1976d2;
+  font-weight: 600;
+}
+
+.hugr-tab-btn-active .hugr-tab-label {
+  max-width: none;
+}
+
+.hugr-tab-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.hugr-tab-icon-json {
+  font-family: monospace;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.hugr-tab-icon-ext {
+  font-size: 15px;
+  color: #78909c;
+}
+
+.hugr-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 150px;
+}
+
+.hugr-tab-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: #eaeaea;
+  color: #666;
+  font-weight: 600;
+}
+
+.hugr-tab-badge-error {
+  background: #fce4ec;
+  color: #d32f2f;
+}
+
+/* Overflow "more" button */
+.hugr-tabs-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  border: none;
+  border-bottom: 2px solid #e0e0e0;
+  background: #f5f5f5;
+  color: #666;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+  letter-spacing: 2px;
+}
+
+.hugr-tabs-more:hover {
+  background: #eaeaea;
+  color: #333;
+}
+
+/* Overflow dropdown menu */
+.hugr-tabs-overflow-menu {
+  position: absolute;
+  z-index: 100;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  max-height: 300px;
+  overflow-y: auto;
+  min-width: 180px;
+}
+
+.hugr-tabs-overflow-item {
+  display: block;
+  width: 100%;
+  padding: 8px 16px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font-family: sans-serif;
+  font-size: 13px;
+  color: #333;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hugr-tabs-overflow-item:hover {
+  background: #f0f0f0;
+}
+
+.hugr-tabs-overflow-item-active {
+  color: #1976d2;
+  font-weight: 600;
+}
+
+.hugr-tab-panel {
+  min-height: 100px;
+}
+
+.hugr-tab-panel perspective-viewer {
+  width: 100%;
+  min-height: 400px;
+  display: block;
+}
+
+.hugr-result-global-banner {
+  padding: 4px 12px;
+  background: #f5f5f5;
+  border-bottom: 1px solid #e0e0e0;
+  font-family: sans-serif;
+  font-size: 12px;
+  color: #666;
+}
+
+.hugr-result-no-data {
+  padding: 12px 16px;
+  color: #666;
+  font-family: sans-serif;
+  font-size: 13px;
+  font-style: italic;
+}
+
+/* ===== JSON toolbar & raw view ===== */
+
+.hugr-json-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 8px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.hugr-json-raw-btn {
+  padding: 2px 10px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  background: #fff;
+  color: #666;
+  font-family: monospace;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.hugr-json-raw-btn:hover {
+  background: #f0f0f0;
+}
+
+.hugr-json-raw-btn-active {
+  background: #1976d2;
+  color: #fff;
+  border-color: #1976d2;
+}
+
+.hugr-json-raw {
+  display: flex;
+  font-family: monospace;
+  font-size: 13px;
+  overflow: auto;
+  max-height: 600px;
+  line-height: 1.5;
+}
+
+.hugr-json-gutter {
+  flex-shrink: 0;
+  padding: 4px 8px 4px 4px;
+  text-align: right;
+  color: #858585;
+  user-select: none;
+  border-right: 1px solid #e0e0e0;
+  min-width: 36px;
+}
+
+.hugr-json-gutter-line {
+  display: block;
+  height: 1.5em;
+}
+
+.hugr-json-code {
+  flex: 1;
+  padding: 4px 0 4px 8px;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.hugr-json-code-line {
+  display: block;
+  height: 1.5em;
+}
+
+.hugr-json-fold-btn {
+  display: inline-block;
+  width: 1em;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  color: #999;
+  font-size: 10px;
+}
+
+.hugr-json-fold-btn:hover {
+  color: #333;
+}
+
+.hugr-json-fold-placeholder {
+  color: #999;
+  cursor: pointer;
+  font-style: italic;
+}
+
+.hugr-json-fold-placeholder:hover {
+  color: #333;
+}
+
+.hugr-json-bracket-highlight {
+  background: rgba(25, 118, 210, 0.15);
+  outline: 1px solid rgba(25, 118, 210, 0.3);
+  border-radius: 1px;
+}
+
+/* ===== JSON tree ===== */
+
+.hugr-json-tree {
+  padding: 8px 12px;
+  font-family: monospace;
+  font-size: 13px;
+  color: #333;
+  overflow: auto;
+  max-height: 500px;
+}
+
+.hugr-json-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hugr-json-toggle {
+  cursor: pointer;
+  user-select: none;
+  width: 14px;
+  flex-shrink: 0;
+  font-size: 10px;
+  color: #666;
+}
+
+.hugr-json-toggle:hover {
+  color: #1976d2;
+}
+
+.hugr-json-summary {
+  cursor: pointer;
+  user-select: none;
+  color: #999;
+  font-style: italic;
+  font-size: 12px;
+}
+
+.hugr-json-summary:hover {
+  color: #333;
+}
+
+.hugr-json-children {
+  padding-left: 20px;
+}
+
+.hugr-json-entry {
+  padding: 1px 0;
+  line-height: 1.5;
+}
+
+.hugr-json-key {
+  color: #1976d2;
+  font-weight: 500;
+}
+
+.hugr-json-index {
+  color: #999;
+}
+
+.hugr-json-string {
+  color: #2e7d32;
+}
+
+.hugr-json-number {
+  color: #1565c0;
+}
+
+.hugr-json-bool {
+  color: #e65100;
+  font-weight: 600;
+}
+
+.hugr-json-null {
+  color: #999;
+  font-style: italic;
+}
+
+.hugr-json-bracket {
+  color: #999;
+}
+
+/* ===== Error part ===== */
+
+.hugr-result-error-item {
+  padding: 8px 16px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.hugr-result-error-item:last-child {
+  border-bottom: none;
+}
+
+.hugr-result-error-message {
+  color: #d32f2f;
+  font-family: sans-serif;
+  font-size: 13px;
+}
+
+.hugr-result-error-path {
+  margin-top: 4px;
+  color: #666;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.hugr-result-error-extensions {
+  margin: 4px 0 0;
+  padding: 8px;
+  background: #f5f5f5;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 12px;
+  color: #333;
+  white-space: pre-wrap;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.hugr-result-expired {
+  padding: 16px 20px;
+  color: #f57c00;
+  font-size: 13px;
+  text-align: center;
+  background: #fff;
+  border: 1px dashed #f57c00;
+  border-radius: 4px;
+  margin: 8px;
+}
+
+.hugr-result-single {
+  width: 100%;
+}

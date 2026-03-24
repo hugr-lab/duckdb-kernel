@@ -2,7 +2,11 @@ const CopyPlugin = require('copy-webpack-plugin');
 const TerserPlugin = require('terser-webpack-plugin');
 const path = require('path');
 
-const PSP = path.resolve(__dirname, 'node_modules', '@perspective-dev');
+// Resolve @perspective-dev from either local or hoisted (workspace root) node_modules
+const fs = require('fs');
+const localPSP = path.resolve(__dirname, 'node_modules', '@perspective-dev');
+const hoistedPSP = path.resolve(__dirname, '..', 'node_modules', '@perspective-dev');
+const PSP = fs.existsSync(localPSP) ? localPSP : hoistedPSP;
 
 // Patch relative WASM paths in CDN JS files so all assets
 // resolve from the same flat directory.

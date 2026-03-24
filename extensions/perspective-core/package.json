@@ -1,0 +1,34 @@
+{
+  "name": "@hugr-lab/perspective-core",
+  "version": "0.1.0",
+  "description": "Platform-agnostic rendering core for HUGR result viewer",
+  "main": "lib/index.js",
+  "module": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib/",
+    "style/"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rimraf lib",
+    "verify": "! grep -r '@jupyterlab\\|vscode\\|@lumino' src/"
+  },
+  "peerDependencies": {
+    "@deck.gl/core": ">=9.0.0",
+    "@deck.gl/geo-layers": ">=9.0.0",
+    "@deck.gl/layers": ">=9.0.0",
+    "apache-arrow": ">=17.0.0"
+  },
+  "devDependencies": {
+    "@deck.gl/core": "^9.2.11",
+    "@deck.gl/geo-layers": "^9.2.11",
+    "@deck.gl/layers": "^9.2.11",
+    "@geoarrow/deck.gl-layers": "^0.3.1",
+    "@geoarrow/geoarrow-wasm": "^0.2.0-beta.5",
+    "apache-arrow": "^21.1.0",
+    "rimraf": "^5.0.0",
+    "typescript": "~5.8.0"
+  },
+  "license": "MIT"
+}

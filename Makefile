@@ -2,7 +2,7 @@ BINARY := duckdb-kernel
 BUILD_TAGS := duckdb_arrow
 KERNEL_DIR := $(HOME)/Library/Jupyter/kernels/duckdb
 
-.PHONY: build install clean test build-jupyterlab install-jupyterlab build-vscode build-extensions
+.PHONY: build install clean test build-perspective-core build-perspective-viewer build-duckdb-explorer build-vscode build-extensions install-jupyterlab copy-perspective
 
 build:
 	go build -tags $(BUILD_TAGS) -o $(BINARY) ./cmd/duckdb-kernel
@@ -21,23 +21,32 @@ install: build copy-perspective
 
 copy-perspective:
 	@mkdir -p static/perspective
-	@cp extensions/jupyterlab/hugr_perspective/labextension/static/perspective/* static/perspective/ 2>/dev/null || true
+	@cp extensions/perspective-viewer/hugr_perspective/labextension/static/perspective/* static/perspective/ 2>/dev/null || true
 	@echo "Perspective static files copied to static/perspective/"
 
 test: install
 	@cd tests && pip install -q -r requirements.txt pytest && \
 		python -m pytest integration_test.py -v
 
-build-jupyterlab:
-	cd extensions/jupyterlab && jlpm install && jlpm build
+# --- Extension builds ---
 
-install-jupyterlab: build-jupyterlab
-	uv pip install -e extensions/jupyterlab/ --python .venv/bin/python
+build-perspective-core:
+	cd extensions/perspective-core && npm install && npm run build
 
-build-vscode:
-	cd extensions/vscode && npm install && npm run build
+build-perspective-viewer: build-perspective-core
+	cd extensions/perspective-viewer && jlpm install && jlpm build:prod
 
-build-extensions: build-jupyterlab build-vscode
+build-duckdb-explorer:
+	cd extensions/duckdb-explorer && jlpm install && jlpm build:prod
+
+build-vscode: build-perspective-core
+	cd extensions/vscode && npm install --no-workspaces && npm run build
+
+build-extensions: build-perspective-viewer build-duckdb-explorer build-vscode
+
+install-jupyterlab: build-perspective-viewer build-duckdb-explorer
+	uv pip install -e extensions/perspective-viewer/ --python .venv/bin/python
+	uv pip install -e extensions/duckdb-explorer/ --python .venv/bin/python
 
 clean:
 	rm -f $(BINARY)

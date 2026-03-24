@@ -80,7 +80,32 @@ jobs:
       - name: Run integration tests
         run: python -m pytest tests/integration_test.py -v
 
-  build-jupyterlab:
+  build-perspective-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Build perspective-core
+        working-directory: extensions/perspective-core
+        run: |
+          npm install
+          npm run build
+
+      - name: Type check
+        working-directory: extensions/perspective-core
+        run: npx tsc --noEmit
+
+      - name: Verify no platform imports
+        run: |
+          ! grep -r '@jupyterlab\|vscode\|@lumino' extensions/perspective-core/lib/
+          echo "No platform imports found — OK"
+
+  build-perspective-viewer:
+    needs: build-perspective-core
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -96,16 +121,50 @@ jobs:
       - name: Install JupyterLab build tools
         run: pip install jupyterlab>=4.0.0
 
-      - name: Build labextension
-        working-directory: extensions/jupyterlab
+      - name: Build perspective-core
+        working-directory: extensions/perspective-core
+        run: |
+          npm install
+          npm run build
+
+      - name: Build perspective-viewer
+        working-directory: extensions/perspective-viewer
         run: |
           jlpm install
           jlpm build:prod
 
       - name: Verify labextension output
         run: |
-          test -d extensions/jupyterlab/hugr_perspective/labextension/static
-          echo "labextension build OK"
+          test -d extensions/perspective-viewer/hugr_perspective/labextension/static
+          test -f extensions/perspective-viewer/hugr_perspective/spool_proxy.py
+          echo "perspective-viewer build OK"
+
+  build-duckdb-explorer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install JupyterLab build tools
+        run: pip install jupyterlab>=4.0.0
+
+      - name: Build duckdb-explorer
+        working-directory: extensions/duckdb-explorer
+        run: |
+          jlpm install
+          jlpm build:prod
+
+      - name: Verify labextension output
+        run: |
+          test -d extensions/duckdb-explorer/hugr_duckdb_explorer/labextension/static
+          echo "duckdb-explorer build OK"
 
   build-vscode:
     runs-on: ubuntu-latest
@@ -115,6 +174,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+
+      - name: Build perspective-core
+        working-directory: extensions/perspective-core
+        run: |
+          npm install
+          npm run build
 
       - name: Build VS Code extension
         working-directory: extensions/vscode

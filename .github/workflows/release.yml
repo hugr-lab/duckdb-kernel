@@ -70,7 +70,7 @@ jobs:
           name: duckdb-kernel-${{ matrix.goos }}-${{ matrix.goarch }}
           path: duckdb-kernel-*
 
-  build-jupyterlab:
+  build-perspective-viewer:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -83,40 +83,83 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install JupyterLab build tools
+      - name: Install build tools
         run: pip install jupyterlab>=4.0.0 build
 
       - name: Set version from tag
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          sed -i "s/^version = .*/version = \"$VERSION\"/" extensions/jupyterlab/pyproject.toml
+          sed -i "s/^version = .*/version = \"$VERSION\"/" extensions/perspective-viewer/pyproject.toml
 
-      - name: Build labextension
-        working-directory: extensions/jupyterlab
+      - name: Build perspective-core
+        working-directory: extensions/perspective-core
+        run: |
+          npm install
+          npm run build
+
+      - name: Build perspective-viewer
+        working-directory: extensions/perspective-viewer
         run: |
           jlpm install
           jlpm build:prod
 
       - name: Build Python wheel
-        working-directory: extensions/jupyterlab
+        working-directory: extensions/perspective-viewer
         run: python -m build
 
       - name: Create perspective-static tarball
         run: |
           tar -czf perspective-static.tar.gz \
-            -C extensions/jupyterlab/hugr_perspective/labextension/static perspective
+            -C extensions/perspective-viewer/hugr_perspective/labextension/static perspective
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
-          name: jupyterlab-wheel
-          path: extensions/jupyterlab/dist/*.whl
+          name: perspective-viewer-wheel
+          path: extensions/perspective-viewer/dist/*.whl
 
       - name: Upload perspective static files
         uses: actions/upload-artifact@v4
         with:
           name: perspective-static
           path: perspective-static.tar.gz
+
+  build-duckdb-explorer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install jupyterlab>=4.0.0 build
+
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/^version = .*/version = \"$VERSION\"/" extensions/duckdb-explorer/pyproject.toml
+
+      - name: Build duckdb-explorer
+        working-directory: extensions/duckdb-explorer
+        run: |
+          jlpm install
+          jlpm build:prod
+
+      - name: Build Python wheel
+        working-directory: extensions/duckdb-explorer
+        run: python -m build
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: duckdb-explorer-wheel
+          path: extensions/duckdb-explorer/dist/*.whl
 
   build-vscode:
     runs-on: ubuntu-latest
@@ -132,6 +175,12 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           cd extensions/vscode
           npm pkg set version="$VERSION"
+
+      - name: Build perspective-core
+        working-directory: extensions/perspective-core
+        run: |
+          npm install
+          npm run build
 
       - name: Build VS Code extension
         working-directory: extensions/vscode
@@ -150,12 +199,17 @@ jobs:
           path: extensions/vscode/hugr-result-renderer.vsix
 
   publish-pypi:
-    needs: build-jupyterlab
+    needs: [build-perspective-viewer, build-duckdb-explorer]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: jupyterlab-wheel
+          name: perspective-viewer-wheel
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: duckdb-explorer-wheel
           path: dist
 
       - name: Publish to PyPI
@@ -180,7 +234,7 @@ jobs:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
   release:
-    needs: [build, build-jupyterlab, build-vscode]
+    needs: [build, build-perspective-viewer, build-duckdb-explorer, build-vscode]
     runs-on: ubuntu-latest
 
     steps:

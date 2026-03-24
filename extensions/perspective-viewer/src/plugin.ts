@@ -1,18 +1,16 @@
 /**
- * JupyterLab application plugin: DuckDB Explorer sidebar.
+ * JupyterLab application plugin: Perspective viewer support.
  *
- * Discovers the kernel's base_url and shows a database object tree.
+ * Discovers the kernel's base_url, initializes spool proxy,
+ * handles "Open in Tab" commands, and tracks notebook directory.
  */
 
 import {
   JupyterFrontEnd,
   JupyterFrontEndPlugin,
-  ILayoutRestorer,
 } from '@jupyterlab/application';
 import { INotebookTracker } from '@jupyterlab/notebook';
 import { MainAreaWidget } from '@jupyterlab/apputils';
-import { DuckDBSidebarWidget } from './sidebar.js';
-import { IntrospectClient } from './introspectClient.js';
 import { PerspectiveTabWidget } from './perspectiveTab.js';
 import { JsonTabWidget } from './jsonTab.js';
 import { initSpoolProxy, setNotebookDir } from './spoolUrl.js';
@@ -24,17 +22,15 @@ function notebookDirFromPath(path: string): string {
   return parts.length > 0 ? parts.join('/') : '.';
 }
 
-const sidebarPlugin: JupyterFrontEndPlugin<void> = {
+const perspectivePlugin: JupyterFrontEndPlugin<void> = {
   id: '@hugr-lab/perspective-viewer:sidebar',
   autoStart: true,
   requires: [INotebookTracker],
-  optional: [ILayoutRestorer],
   activate: (
     app: JupyterFrontEnd,
     notebookTracker: INotebookTracker,
-    restorer: ILayoutRestorer | null,
   ) => {
-    console.log('[DuckDB Explorer] Sidebar plugin activated');
+    console.log('[Perspective Viewer] Plugin activated');
 
     // Initialize spool proxy for JupyterLab/Hub (provides auth + routing)
     const settings = app.serviceManager.serverSettings;
@@ -58,14 +54,6 @@ const sidebarPlugin: JupyterFrontEndPlugin<void> = {
       app.shell.add(widget, 'main');
     }) as EventListener);
 
-    const sidebar = new DuckDBSidebarWidget();
-
-    app.shell.add(sidebar, 'right', { rank: 500 });
-
-    if (restorer) {
-      restorer.add(sidebar, 'duckdb-explorer-sidebar');
-    }
-
     let discoveredUrl: string | null = null;
 
     const tryDiscover = async () => {
@@ -84,7 +72,6 @@ const sidebarPlugin: JupyterFrontEndPlugin<void> = {
         const baseUrl = content?.hugr_base_url;
         if (baseUrl && baseUrl !== discoveredUrl) {
           discoveredUrl = baseUrl;
-          sidebar.setClient(new IntrospectClient(baseUrl));
           // Broadcast base URL for widget.ts Arrow URL rebuilding
           document.dispatchEvent(new CustomEvent('hugr:base-url-update', { detail: { baseUrl } }));
         }
@@ -94,8 +81,6 @@ const sidebarPlugin: JupyterFrontEndPlugin<void> = {
     };
 
     // Track notebook directory for spool pin/unpin.
-    // Set from every event that touches a notebook — by the time
-    // widget.ts calls getNotebookDir(), it must be non-null.
     const syncDir = () => {
       const panel = notebookTracker.currentWidget;
       if (panel?.context?.path) {
@@ -109,12 +94,10 @@ const sidebarPlugin: JupyterFrontEndPlugin<void> = {
     });
 
     notebookTracker.widgetAdded.connect((_sender, panel) => {
-      // Set dir from this specific panel immediately
       if (panel.context?.path) {
         setNotebookDir(notebookDirFromPath(panel.context.path));
       }
 
-      // Also set dir when context path becomes available (async load)
       panel.context.ready.then(() => {
         if (panel.context.path) {
           setNotebookDir(notebookDirFromPath(panel.context.path));
@@ -131,9 +114,8 @@ const sidebarPlugin: JupyterFrontEndPlugin<void> = {
       });
     });
 
-    // Set dir now if a notebook is already open
     syncDir();
   },
 };
 
-export default sidebarPlugin;
+export default perspectivePlugin;
