@@ -92,7 +92,7 @@ jobs:
       - name: Build perspective-core
         working-directory: extensions/perspective-core
         run: |
-          npm install
+          npm install --no-workspaces
           npm run build
 
       - name: Type check
@@ -124,12 +124,13 @@ jobs:
       - name: Build perspective-core
         working-directory: extensions/perspective-core
         run: |
-          npm install
+          npm install --no-workspaces
           npm run build
 
       - name: Build perspective-viewer
         working-directory: extensions/perspective-viewer
         run: |
+          rm -f ../package.json
           jlpm install
           jlpm build:prod
 
@@ -158,6 +159,7 @@ jobs:
       - name: Build duckdb-explorer
         working-directory: extensions/duckdb-explorer
         run: |
+          rm -f ../package.json
           jlpm install
           jlpm build:prod
 
@@ -178,13 +180,13 @@ jobs:
       - name: Build perspective-core
         working-directory: extensions/perspective-core
         run: |
-          npm install
+          npm install --no-workspaces
           npm run build
 
       - name: Build VS Code extension
         working-directory: extensions/vscode
         run: |
-          npm install
+          npm install --no-workspaces
           npm run build
 
       - name: Verify renderer output
