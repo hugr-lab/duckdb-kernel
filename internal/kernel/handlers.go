@@ -275,6 +275,20 @@ func (k *Kernel) handleExecuteRequest(ctx context.Context, msg *Message) {
 		if err := k.sendMessage(k.iopubSocket, displayMsg); err != nil {
 			log.Printf("send display_data error: %v", err)
 		}
+	} else {
+		// DDL/DML with no result set — send confirmation with timing
+		text := fmt.Sprintf("Success (%.0f ms)", float64(queryTimeMs))
+		displayMsg := NewMessage(msg, "display_data")
+		displayMsg.Content = map[string]any{
+			"data": map[string]any{
+				"text/plain": text,
+			},
+			"metadata":  map[string]any{},
+			"transient": map[string]any{},
+		}
+		if err := k.sendMessage(k.iopubSocket, displayMsg); err != nil {
+			log.Printf("send display_data error: %v", err)
+		}
 	}
 
 	// Send execute_reply
