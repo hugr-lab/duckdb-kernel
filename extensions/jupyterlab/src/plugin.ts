@@ -15,7 +15,14 @@ import { DuckDBSidebarWidget } from './sidebar.js';
 import { IntrospectClient } from './introspectClient.js';
 import { PerspectiveTabWidget } from './perspectiveTab.js';
 import { JsonTabWidget } from './jsonTab.js';
-import { initSpoolProxy } from './spoolUrl.js';
+import { initSpoolProxy, setNotebookDir } from './spoolUrl.js';
+
+/** Extract directory part from a notebook path. */
+function notebookDirFromPath(path: string): string {
+  const parts = path.split('/');
+  parts.pop(); // remove filename
+  return parts.length > 0 ? parts.join('/') : '.';
+}
 
 const sidebarPlugin: JupyterFrontEndPlugin<void> = {
   id: '@hugr-lab/perspective-viewer:sidebar',
@@ -86,14 +93,46 @@ const sidebarPlugin: JupyterFrontEndPlugin<void> = {
       }
     };
 
-    notebookTracker.currentChanged.connect(() => void tryDiscover());
+    // Track notebook directory for spool pin/unpin.
+    // Set from every event that touches a notebook — by the time
+    // widget.ts calls getNotebookDir(), it must be non-null.
+    const syncDir = () => {
+      const panel = notebookTracker.currentWidget;
+      if (panel?.context?.path) {
+        setNotebookDir(notebookDirFromPath(panel.context.path));
+      }
+    };
+
+    notebookTracker.currentChanged.connect(() => {
+      syncDir();
+      void tryDiscover();
+    });
+
     notebookTracker.widgetAdded.connect((_sender, panel) => {
-      const onStatusChanged = () => void tryDiscover();
+      // Set dir from this specific panel immediately
+      if (panel.context?.path) {
+        setNotebookDir(notebookDirFromPath(panel.context.path));
+      }
+
+      // Also set dir when context path becomes available (async load)
+      panel.context.ready.then(() => {
+        if (panel.context.path) {
+          setNotebookDir(notebookDirFromPath(panel.context.path));
+        }
+      }).catch(() => {});
+
+      const onStatusChanged = () => {
+        syncDir();
+        void tryDiscover();
+      };
       panel.sessionContext.statusChanged.connect(onStatusChanged);
       panel.disposed.connect(() => {
         panel.sessionContext.statusChanged.disconnect(onStatusChanged);
       });
     });
+
+    // Set dir now if a notebook is already open
+    syncDir();
   },
 };
 

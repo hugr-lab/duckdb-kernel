@@ -4,6 +4,7 @@
  */
 
 let _serverSettings: { baseUrl: string; token: string } | null = null;
+let _notebookDir: string | null = null;
 
 /**
  * Initialize with ServerConnection settings from JupyterLab.
@@ -16,9 +17,25 @@ export function initSpoolProxy(settings: { baseUrl: string; token: string }): vo
 
 /**
  * Check if spool proxy is available (running inside JupyterLab/Hub).
+ * True whenever initSpoolProxy was called — even without token (local dev).
  */
 export function hasSpoolProxy(): boolean {
-  return _serverSettings !== null && _serverSettings.baseUrl !== '';
+  return _serverSettings !== null;
+}
+
+/**
+ * Set the current notebook directory (for pin/unpin/is_pinned operations).
+ * Called from plugin.ts when the active notebook changes.
+ */
+export function setNotebookDir(dir: string | null): void {
+  _notebookDir = dir;
+}
+
+/**
+ * Get the current notebook directory.
+ */
+export function getNotebookDir(): string | null {
+  return _notebookDir;
 }
 
 /**
@@ -99,6 +116,40 @@ export function getSpoolFetchInit(signal?: AbortSignal): RequestInit {
     init.headers = {
       Authorization: `token ${_serverSettings.token}`,
     };
+  }
+
+  return init;
+}
+
+/**
+ * Read _xsrf cookie value for Tornado XSRF protection.
+ */
+function getXsrfToken(): string | null {
+  const match = document.cookie.match(/(?:^|;\s*)_xsrf=([^;]*)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+/**
+ * Get fetch init for mutating spool requests (DELETE, POST).
+ * Includes XSRF token header required by Tornado.
+ */
+export function getSpoolMutatingFetchInit(method: 'DELETE' | 'POST', signal?: AbortSignal): RequestInit {
+  const init: RequestInit = { method };
+  if (signal) init.signal = signal;
+
+  const headers: Record<string, string> = {};
+
+  if (_serverSettings?.token) {
+    headers['Authorization'] = `token ${_serverSettings.token}`;
+  }
+
+  const xsrf = getXsrfToken();
+  if (xsrf) {
+    headers['X-XSRFToken'] = xsrf;
+  }
+
+  if (Object.keys(headers).length > 0) {
+    init.headers = headers;
   }
 
   return init;

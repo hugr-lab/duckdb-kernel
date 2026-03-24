@@ -2,7 +2,7 @@ BINARY := duckdb-kernel
 BUILD_TAGS := duckdb_arrow
 KERNEL_DIR := $(HOME)/Library/Jupyter/kernels/duckdb
 
-.PHONY: build install clean test build-jupyterlab build-vscode build-extensions
+.PHONY: build install clean test build-jupyterlab install-jupyterlab build-vscode build-extensions
 
 build:
 	go build -tags $(BUILD_TAGS) -o $(BINARY) ./cmd/duckdb-kernel
@@ -30,6 +30,9 @@ test: install
 
 build-jupyterlab:
 	cd extensions/jupyterlab && jlpm install && jlpm build
+
+install-jupyterlab: build-jupyterlab
+	uv pip install -e extensions/jupyterlab/ --python .venv/bin/python
 
 build-vscode:
 	cd extensions/vscode && npm install && npm run build
