@@ -51,7 +51,8 @@ async function streamArrowToTable(
   perspectiveWorker: any,
   signal?: AbortSignal,
 ): Promise<any> {
-  const response = await fetch(arrowUrl, { signal });
+  const { getSpoolFetchInit } = await import('./spoolUrl.js');
+  const response = await fetch(arrowUrl, getSpoolFetchInit(signal));
   if (!response.ok) {
     throw new Error(`Failed to fetch Arrow data (HTTP ${response.status})`);
   }

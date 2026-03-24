@@ -9,6 +9,7 @@
 import { IRenderMime } from '@jupyterlab/rendermime-interfaces';
 import { Widget } from '@lumino/widgets';
 import { registerMapPlugin } from './map-plugin';
+import { hasSpoolProxy, buildArrowStreamUrl, buildSpoolUrl, getSpoolFetchInit } from './spoolUrl';
 
 const MIME_TYPE = 'application/vnd.hugr.result+json';
 
@@ -175,6 +176,27 @@ function rebuildArrowUrl(oldUrl: string, baseUrl?: string): string {
   }
 }
 
+/**
+ * Resolve Arrow URL: if spool proxy is available, rewrite kernel direct URL
+ * to go through the proxy. Otherwise return as-is.
+ */
+function resolveArrowUrl(arrowUrl: string): string {
+  if (!hasSpoolProxy()) return arrowUrl;
+  try {
+    const url = new URL(arrowUrl);
+    const queryId = url.searchParams.get('q');
+    if (!queryId) return arrowUrl;
+    return buildArrowStreamUrl(queryId, {
+      geoarrow: url.searchParams.has('geoarrow'),
+      limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
+      total: url.searchParams.has('total') ? Number(url.searchParams.get('total')) : undefined,
+      columns: url.searchParams.has('columns') ? url.searchParams.get('columns')!.split(',') : undefined,
+    });
+  } catch {
+    return arrowUrl;
+  }
+}
+
 /** Escape HTML to prevent XSS in innerHTML. */
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -190,10 +212,12 @@ async function streamArrowToTable(
   perspectiveWorker: any,
   signal?: AbortSignal,
 ): Promise<any> {
+  const fetchInit = getSpoolFetchInit(signal);
+
   // Try fetch, retry with rebuilt URL on connection error (port may have changed after reload)
   let response: Response | undefined;
   try {
-    response = await fetch(arrowUrl, { signal });
+    response = await fetch(arrowUrl, fetchInit);
   } catch {
     // Connection error — wait for kernel base URL discovery, then retry
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -201,7 +225,7 @@ async function streamArrowToTable(
       const rebuilt = rebuildArrowUrl(arrowUrl);
       if (rebuilt !== arrowUrl) {
         try {
-          response = await fetch(rebuilt, { signal });
+          response = await fetch(rebuilt, fetchInit);
           break;
         } catch { /* retry */ }
       }
@@ -328,7 +352,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       // Check backend for pin status (handles page reload case)
       for (const id of newIds) {
         try {
-          const resp = await fetch(`${baseUrl}/spool/is_pinned?query_id=${id}`);
+          const resp = await fetch(buildSpoolUrl('is_pinned', id, { kernelBaseUrl: baseUrl }), getSpoolFetchInit());
           if (resp.ok) {
             const data = await resp.json();
             if (data.pinned) {
@@ -346,7 +370,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       if (oldQueryIds.length > 0 && baseUrl) {
         for (const id of oldQueryIds) {
           _pinnedQueryIds.delete(id);
-          fetch(`${baseUrl}/spool/delete?query_id=${id}`, { method: 'DELETE' }).catch(() => {});
+          fetch(buildSpoolUrl('delete', id, { kernelBaseUrl: baseUrl }), { method: 'DELETE', ...getSpoolFetchInit() }).catch(() => {});
         }
       }
       // Auto-pin new results if this cell was previously pinned
@@ -355,7 +379,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
         for (const id of newIds) {
           if (!_pinnedQueryIds.has(id)) {
             _pinnedQueryIds.add(id);
-            fetch(`${baseUrl}/spool/pin?query_id=${id}`, { method: 'POST' }).catch(() => {});
+            fetch(buildSpoolUrl('pin', id, { kernelBaseUrl: baseUrl }), { method: 'POST', ...getSpoolFetchInit() }).catch(() => {});
           }
         }
       }
@@ -628,7 +652,10 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       return;
     }
 
-    const truncation = parseTruncation(part.arrow_url);
+    // Rewrite URL to use spool proxy if available
+    part = { ...part, arrow_url: resolveArrowUrl(part.arrow_url!) };
+
+    const truncation = parseTruncation(part.arrow_url!);
 
     // Status banner
     const statusParts: string[] = [];
@@ -1100,7 +1127,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
     if (this._prevQueryIds.length > 0 && _lastKnownBaseUrl) {
       for (const id of this._prevQueryIds) {
         if (!_pinnedQueryIds.has(id)) {
-          fetch(`${_lastKnownBaseUrl}/spool/delete?query_id=${id}`, { method: 'DELETE' }).catch(() => {});
+          fetch(buildSpoolUrl('delete', id, { kernelBaseUrl: _lastKnownBaseUrl! }), { method: 'DELETE', ...getSpoolFetchInit() }).catch(() => {});
         }
       }
     }
@@ -1147,7 +1174,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       const endpoint = wasPinned ? 'unpin' : 'pin';
 
       try {
-        const resp = await fetch(`${base}/spool/${endpoint}?query_id=${qid}`, { method: 'POST' });
+        const resp = await fetch(buildSpoolUrl(endpoint as 'pin' | 'unpin', qid, { kernelBaseUrl: base }), { method: 'POST', ...getSpoolFetchInit() });
         if (resp.ok) {
           this._isPinned = !wasPinned;
           if (this._isPinned) {

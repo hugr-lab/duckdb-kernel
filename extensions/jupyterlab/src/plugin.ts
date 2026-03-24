@@ -15,6 +15,7 @@ import { DuckDBSidebarWidget } from './sidebar.js';
 import { IntrospectClient } from './introspectClient.js';
 import { PerspectiveTabWidget } from './perspectiveTab.js';
 import { JsonTabWidget } from './jsonTab.js';
+import { initSpoolProxy } from './spoolUrl.js';
 
 const sidebarPlugin: JupyterFrontEndPlugin<void> = {
   id: '@hugr-lab/perspective-viewer:sidebar',
@@ -27,6 +28,10 @@ const sidebarPlugin: JupyterFrontEndPlugin<void> = {
     restorer: ILayoutRestorer | null,
   ) => {
     console.log('[DuckDB Explorer] Sidebar plugin activated');
+
+    // Initialize spool proxy for JupyterLab/Hub (provides auth + routing)
+    const settings = app.serviceManager.serverSettings;
+    initSpoolProxy({ baseUrl: settings.baseUrl, token: settings.token });
 
     document.addEventListener('hugr:open-in-tab', ((e: CustomEvent) => {
       const { arrowUrl, title, geometryColumns, tileSources } = e.detail;

@@ -203,7 +203,8 @@ interface FeatureRow {
  *  Each chunk is a complete IPC message: [4-byte LE length][Arrow IPC bytes].
  *  Returns individual chunks (not concatenated), since each is a standalone IPC stream. */
 async function fetchArrowChunks(url: string): Promise<Uint8Array[]> {
-  const response = await fetch(url);
+  const { getSpoolFetchInit } = await import('./spoolUrl.js');
+  const response = await fetch(url, getSpoolFetchInit());
   if (!response.ok) throw new Error(`Failed to fetch Arrow data (HTTP ${response.status})`);
   if (!response.body) throw new Error('Response body is null');
 
