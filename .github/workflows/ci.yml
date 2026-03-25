@@ -80,7 +80,7 @@ jobs:
       - name: Run integration tests
         run: python -m pytest tests/integration_test.py -v
 
-  build-extensions:
+  build-jupyter:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -128,9 +128,26 @@ jobs:
           test -d extensions/duckdb-explorer/hugr_duckdb_explorer/labextension/static
           echo "duckdb-explorer build OK"
 
+  build-vscode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Build perspective-core
+        working-directory: extensions/perspective-core
+        run: |
+          npm install --no-workspaces
+          npm run build
+
       - name: Build VS Code extension
         working-directory: extensions/vscode
-        run: npm run build
+        run: |
+          npm install --no-workspaces
+          npm run build
 
       - name: Verify VS Code output
         run: |

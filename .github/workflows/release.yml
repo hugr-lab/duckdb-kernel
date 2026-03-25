@@ -70,7 +70,7 @@ jobs:
           name: duckdb-kernel-${{ matrix.goos }}-${{ matrix.goarch }}
           path: duckdb-kernel-*
 
-  build-extensions:
+  build-jupyter:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -91,7 +91,6 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           sed -i "s/^version = .*/version = \"$VERSION\"/" extensions/perspective-viewer/pyproject.toml
           sed -i "s/^version = .*/version = \"$VERSION\"/" extensions/duckdb-explorer/pyproject.toml
-          cd extensions/vscode && npm pkg set version="$VERSION"
 
       - name: Install workspace dependencies
         working-directory: extensions
@@ -122,14 +121,6 @@ jobs:
         working-directory: extensions/duckdb-explorer
         run: python -m build
 
-      - name: Build VS Code extension
-        working-directory: extensions/vscode
-        run: npm run build
-
-      - name: Package VSIX
-        working-directory: extensions/vscode
-        run: npx @vscode/vsce package --no-dependencies -o hugr-result-renderer.vsix
-
       - name: Upload perspective-viewer wheel
         uses: actions/upload-artifact@v4
         with:
@@ -148,6 +139,37 @@ jobs:
           name: perspective-static
           path: perspective-static.tar.gz
 
+  build-vscode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd extensions/vscode
+          npm pkg set version="$VERSION"
+
+      - name: Build perspective-core
+        working-directory: extensions/perspective-core
+        run: |
+          npm install --no-workspaces
+          npm run build
+
+      - name: Build VS Code extension
+        working-directory: extensions/vscode
+        run: |
+          npm install --no-workspaces
+          npm run build
+
+      - name: Package VSIX
+        working-directory: extensions/vscode
+        run: npx @vscode/vsce package --no-dependencies -o hugr-result-renderer.vsix
+
       - name: Upload VSIX
         uses: actions/upload-artifact@v4
         with:
@@ -155,7 +177,7 @@ jobs:
           path: extensions/vscode/hugr-result-renderer.vsix
 
   publish-pypi:
-    needs: build-extensions
+    needs: build-jupyter
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -175,7 +197,7 @@ jobs:
           skip-existing: true
 
   publish-vscode:
-    needs: build-extensions
+    needs: build-vscode
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -190,7 +212,7 @@ jobs:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
   release:
-    needs: [build, build-extensions]
+    needs: [build, build-jupyter, build-vscode]
     runs-on: ubuntu-latest
 
     steps:

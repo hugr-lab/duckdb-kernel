@@ -3,7 +3,6 @@
   "workspaces": [
     "perspective-core",
     "perspective-viewer",
-    "duckdb-explorer",
-    "vscode"
+    "duckdb-explorer"
   ]
 }
