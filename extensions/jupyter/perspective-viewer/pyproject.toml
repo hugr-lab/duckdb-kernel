@@ -22,6 +22,7 @@ ignore-vcs = true
 
 [tool.hatch.build.targets.wheel.shared-data]
 "hugr_perspective/labextension" = "share/jupyter/labextensions/@hugr-lab/perspective-viewer"
+"jupyter-config/hugr_perspective.json" = "etc/jupyter/jupyter_server_config.d/hugr_perspective.json"
 
 [tool.hatch.build.hooks.jupyter-builder]
 dependencies = ["hatch-jupyter-builder>=0.5"]
