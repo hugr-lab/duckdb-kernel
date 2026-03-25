@@ -1,9 +1,10 @@
 BINARY := duckdb-kernel
 BUILD_TAGS := duckdb_arrow
 KERNEL_DIR := $(HOME)/Library/Jupyter/kernels/duckdb
+KERNEL_DEV_DIR := $(HOME)/Library/Jupyter/kernels/duckdb-dev
 PYTHON := .venv/bin/python
 
-.PHONY: build install clean test \
+.PHONY: build install install-dev clean test \
 	build-perspective-core build-jupyter build-vscode build-extensions \
 	install-jupyterlab install-vscode copy-perspective
 
@@ -20,6 +21,15 @@ install: build copy-perspective
 	@cp kernel/logo-32x32.png kernel/logo-64x64.png $(KERNEL_DIR)/ 2>/dev/null || true
 	@ln -sfn $(CURDIR)/static $(KERNEL_DIR)/static
 	@echo "Kernel installed to $(KERNEL_DIR)"
+
+install-dev: build copy-perspective
+	mkdir -p $(KERNEL_DEV_DIR)
+	ln -sf $(CURDIR)/$(BINARY) $(KERNEL_DEV_DIR)/$(BINARY)
+	@test -f $(KERNEL_DEV_DIR)/kernel.json || cp kernel/kernel.json $(KERNEL_DEV_DIR)/kernel.json
+	@test -f $(KERNEL_DEV_DIR)/kernel.json && \
+		sed -i'' -e 's|"duckdb-kernel"|"$(KERNEL_DEV_DIR)/$(BINARY)"|' $(KERNEL_DEV_DIR)/kernel.json || true
+	@ln -sfn $(CURDIR)/static $(KERNEL_DEV_DIR)/static
+	@echo "Dev kernel installed to $(KERNEL_DEV_DIR)"
 
 test: install
 	@cd tests && pip install -q -r requirements.txt pytest && \
