@@ -8,7 +8,7 @@
 
 import { IRenderMime } from '@jupyterlab/rendermime-interfaces';
 import { Widget } from '@lumino/widgets';
-import { registerMapPlugin } from './map-plugin';
+import { registerMapPlugin, setMapPluginFetchInit } from '@hugr-lab/perspective-core';
 import { hasSpoolProxy, buildArrowStreamUrl, buildSpoolUrl, getSpoolFetchInit, getSpoolMutatingFetchInit, getNotebookDir } from './spoolUrl';
 
 const MIME_TYPE = 'application/vnd.hugr.result+json';
@@ -89,6 +89,8 @@ function loadPerspective(): Promise<any> {
     }
 
     await customElements.whenDefined('perspective-viewer');
+    // Configure map plugin with auth headers for Arrow fetch
+    setMapPluginFetchInit(() => getSpoolFetchInit());
     await registerMapPlugin();
     return perspective;
   })();

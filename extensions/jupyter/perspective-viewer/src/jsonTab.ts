@@ -3,7 +3,7 @@
  */
 
 import { Widget } from '@lumino/widgets';
-import { buildJsonRawView } from './widget';
+import { buildJsonRawView, buildJsonTree } from '@hugr-lab/perspective-core';
 
 export class JsonTabWidget extends Widget {
   constructor(data: any, title?: string) {
@@ -34,10 +34,10 @@ export class JsonTabWidget extends Widget {
     // Tree view
     const tree = document.createElement('div');
     tree.className = 'hugr-json-tree';
-    this._buildJsonTree(data, tree, true);
+    buildJsonTree(data, tree, true);
     this.node.appendChild(tree);
 
-    // Raw view with syntax highlighting, line numbers, folding, bracket matching
+    // Raw view
     const rawWrap = document.createElement('div');
     rawWrap.className = 'hugr-json-raw';
     rawWrap.style.display = 'none';
@@ -54,112 +54,5 @@ export class JsonTabWidget extends Widget {
     };
     treeBtn.addEventListener('click', () => setMode('tree'));
     rawBtn.addEventListener('click', () => setMode('raw'));
-  }
-
-  private _buildJsonTree(data: any, parent: HTMLElement, expanded: boolean): void {
-    if (data === null || data === undefined) {
-      const val = document.createElement('span');
-      val.className = 'hugr-json-null';
-      val.textContent = 'null';
-      parent.appendChild(val);
-      return;
-    }
-
-    if (Array.isArray(data)) {
-      if (data.length === 0) {
-        const val = document.createElement('span');
-        val.className = 'hugr-json-bracket';
-        val.textContent = '[]';
-        parent.appendChild(val);
-        return;
-      }
-      this._buildCollapsible(data, parent, expanded, true);
-      return;
-    }
-
-    if (typeof data === 'object') {
-      const keys = Object.keys(data);
-      if (keys.length === 0) {
-        const val = document.createElement('span');
-        val.className = 'hugr-json-bracket';
-        val.textContent = '{}';
-        parent.appendChild(val);
-        return;
-      }
-      this._buildCollapsible(data, parent, expanded, false);
-      return;
-    }
-
-    const val = document.createElement('span');
-    if (typeof data === 'string') {
-      val.className = 'hugr-json-string';
-      val.textContent = JSON.stringify(data);
-    } else if (typeof data === 'number') {
-      val.className = 'hugr-json-number';
-      val.textContent = String(data);
-    } else if (typeof data === 'boolean') {
-      val.className = 'hugr-json-bool';
-      val.textContent = String(data);
-    } else {
-      val.textContent = String(data);
-    }
-    parent.appendChild(val);
-  }
-
-  private _buildCollapsible(data: any, parent: HTMLElement, expanded: boolean, isArray: boolean): void {
-    const count = isArray ? data.length : Object.keys(data).length;
-
-    const row = document.createElement('div');
-    row.className = 'hugr-json-row';
-
-    const toggle = document.createElement('span');
-    toggle.className = 'hugr-json-toggle';
-    toggle.textContent = expanded ? '\u25BC' : '\u25B6';
-    row.appendChild(toggle);
-
-    const summary = document.createElement('span');
-    summary.className = 'hugr-json-summary';
-    summary.textContent = isArray ? `Array(${count})` : `{${count} keys}`;
-    row.appendChild(summary);
-
-    parent.appendChild(row);
-
-    const children = document.createElement('div');
-    children.className = 'hugr-json-children';
-    children.style.display = expanded ? '' : 'none';
-
-    if (isArray) {
-      for (let i = 0; i < data.length; i++) {
-        const entry = document.createElement('div');
-        entry.className = 'hugr-json-entry';
-        const key = document.createElement('span');
-        key.className = 'hugr-json-index';
-        key.textContent = `${i}: `;
-        entry.appendChild(key);
-        this._buildJsonTree(data[i], entry, false);
-        children.appendChild(entry);
-      }
-    } else {
-      for (const [k, v] of Object.entries(data)) {
-        const entry = document.createElement('div');
-        entry.className = 'hugr-json-entry';
-        const key = document.createElement('span');
-        key.className = 'hugr-json-key';
-        key.textContent = `${k}: `;
-        entry.appendChild(key);
-        this._buildJsonTree(v, entry, false);
-        children.appendChild(entry);
-      }
-    }
-
-    parent.appendChild(children);
-
-    const doToggle = () => {
-      const isOpen = children.style.display !== 'none';
-      children.style.display = isOpen ? 'none' : '';
-      toggle.textContent = isOpen ? '\u25B6' : '\u25BC';
-    };
-    toggle.addEventListener('click', doToggle);
-    summary.addEventListener('click', doToggle);
   }
 }
