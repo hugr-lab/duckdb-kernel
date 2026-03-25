@@ -97,7 +97,7 @@ jobs:
 
       - name: Type check
         working-directory: extensions/perspective-core
-        run: npx tsc --noEmit
+        run: ./node_modules/.bin/tsc --noEmit
 
       - name: Verify no platform imports
         run: |
@@ -130,7 +130,7 @@ jobs:
       - name: Build perspective-viewer
         working-directory: extensions/perspective-viewer
         run: |
-          rm -f ../package.json
+          rm -f ../package.json ../yarn.lock
           jlpm install
           jlpm build:prod
 
@@ -159,7 +159,7 @@ jobs:
       - name: Build duckdb-explorer
         working-directory: extensions/duckdb-explorer
         run: |
-          rm -f ../package.json
+          rm -f ../package.json ../yarn.lock
           jlpm install
           jlpm build:prod
 
