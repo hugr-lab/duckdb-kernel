@@ -11,9 +11,11 @@ import {
   type GeometryColumnMeta,
   type TileSourceMeta,
 } from '@hugr-lab/perspective-core';
-import { getSpoolFetchInit } from './spoolUrl';
+import { getSpoolFetchInit, getBaseUrl } from './spoolUrl';
 
-const STATIC_BASE = '/lab/extensions/@hugr-lab/perspective-viewer/static/perspective';
+function getStaticBase(): string {
+  return `${getBaseUrl()}lab/extensions/@hugr-lab/perspective-viewer/static/perspective`;
+}
 
 export class PerspectiveTabWidget extends Widget {
   private _arrowUrl: string;
@@ -49,7 +51,7 @@ export class PerspectiveTabWidget extends Widget {
     this.node.innerHTML = '<div class="hugr-result-loading">Loading viewer...</div>';
 
     try {
-      const perspective = await loadPerspective(STATIC_BASE, registerMapPlugin);
+      const perspective = await loadPerspective(getStaticBase(), registerMapPlugin);
 
       this._abortController = new AbortController();
       this._client = await perspective.worker();

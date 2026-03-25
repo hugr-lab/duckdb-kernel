@@ -24,6 +24,14 @@ export function hasSpoolProxy(): boolean {
 }
 
 /**
+ * Get JupyterLab base URL (e.g. "/" or "/user/admin/").
+ * Used for building paths to static extension assets.
+ */
+export function getBaseUrl(): string {
+  return _serverSettings?.baseUrl ?? '/';
+}
+
+/**
  * Set the current notebook directory (for pin/unpin/is_pinned operations).
  * Called from plugin.ts when the active notebook changes.
  */

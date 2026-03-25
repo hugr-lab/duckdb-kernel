@@ -9,12 +9,16 @@
 import { IRenderMime } from '@jupyterlab/rendermime-interfaces';
 import { Widget } from '@lumino/widgets';
 import { registerMapPlugin, setMapPluginFetchInit } from '@hugr-lab/perspective-core';
-import { hasSpoolProxy, buildArrowStreamUrl, buildSpoolUrl, getSpoolFetchInit, getSpoolMutatingFetchInit, getNotebookDir } from './spoolUrl';
+import { hasSpoolProxy, buildArrowStreamUrl, buildSpoolUrl, getSpoolFetchInit, getSpoolMutatingFetchInit, getNotebookDir, getBaseUrl } from './spoolUrl';
 
 const MIME_TYPE = 'application/vnd.hugr.result+json';
 
-const STATIC_BASE = '/lab/extensions/@hugr-lab/perspective-viewer/static/perspective';
-const ICONS_BASE = '/lab/extensions/@hugr-lab/perspective-viewer/static/icons';
+function getStaticBase(): string {
+  return `${getBaseUrl()}lab/extensions/@hugr-lab/perspective-viewer/static/perspective`;
+}
+function getIconsBase(): string {
+  return `${getBaseUrl()}lab/extensions/@hugr-lab/perspective-viewer/static/icons`;
+}
 
 /** Geometry column metadata from Arrow schema detection. */
 interface GeometryColumnMeta {
@@ -75,12 +79,12 @@ function loadPerspective(): Promise<any> {
   }
   _perspectiveReady = (async () => {
     const [perspective] = await Promise.all([
-      import(/* webpackIgnore: true */ `${STATIC_BASE}/perspective.js`),
-      import(/* webpackIgnore: true */ `${STATIC_BASE}/perspective-viewer.js`),
-      import(/* webpackIgnore: true */ `${STATIC_BASE}/perspective-viewer-datagrid.js`),
-      import(/* webpackIgnore: true */ `${STATIC_BASE}/perspective-viewer-d3fc.js`),
+      import(/* webpackIgnore: true */ `${getStaticBase()}/perspective.js`),
+      import(/* webpackIgnore: true */ `${getStaticBase()}/perspective-viewer.js`),
+      import(/* webpackIgnore: true */ `${getStaticBase()}/perspective-viewer-datagrid.js`),
+      import(/* webpackIgnore: true */ `${getStaticBase()}/perspective-viewer-d3fc.js`),
     ]);
-    const themeHref = `${STATIC_BASE}/themes.css`;
+    const themeHref = `${getStaticBase()}/themes.css`;
     if (!document.querySelector(`link[href="${themeHref}"]`)) {
       const link = document.createElement('link');
       link.rel = 'stylesheet';
@@ -732,7 +736,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
 
       const openTabBtn = document.createElement('button');
       openTabBtn.className = 'hugr-open-tab-btn';
-      openTabBtn.innerHTML = `<img src="${ICONS_BASE}/open-in-new-tab.png" class="hugr-btn-icon" alt="Open in Tab">`;
+      openTabBtn.innerHTML = `<img src="${getIconsBase()}/open-in-new-tab.png" class="hugr-btn-icon" alt="Open in Tab">`;
       openTabBtn.title = 'Open in Tab';
       openTabBtn.addEventListener('click', () => {
         document.dispatchEvent(new CustomEvent('hugr:open-in-tab', {
@@ -830,7 +834,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
 
     const openTabBtn = document.createElement('button');
     openTabBtn.className = 'hugr-open-tab-btn';
-    openTabBtn.innerHTML = `<img src="${ICONS_BASE}/open-in-new-tab.png" class="hugr-btn-icon" alt="Open in Tab">`;
+    openTabBtn.innerHTML = `<img src="${getIconsBase()}/open-in-new-tab.png" class="hugr-btn-icon" alt="Open in Tab">`;
     openTabBtn.title = 'Open JSON in a separate tab';
     openTabBtn.addEventListener('click', () => {
       document.dispatchEvent(new CustomEvent('hugr:open-json-in-tab', {
@@ -1066,7 +1070,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
 
         const openTabBtn = document.createElement('button');
         openTabBtn.className = 'hugr-open-tab-btn';
-        openTabBtn.innerHTML = `<img src="${ICONS_BASE}/open-in-new-tab.png" class="hugr-btn-icon" alt="Open in Tab">`;
+        openTabBtn.innerHTML = `<img src="${getIconsBase()}/open-in-new-tab.png" class="hugr-btn-icon" alt="Open in Tab">`;
       openTabBtn.title = 'Open in Tab';
         openTabBtn.addEventListener('click', () => {
           document.dispatchEvent(new CustomEvent('hugr:open-in-tab', {
@@ -1213,7 +1217,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
     btn.className = 'hugr-pin-btn';
 
     const updateLabel = () => {
-      const src = this._isPinned ? `${ICONS_BASE}/unpin.png` : `${ICONS_BASE}/pin.png`;
+      const src = this._isPinned ? `${getIconsBase()}/unpin.png` : `${getIconsBase()}/pin.png`;
       const title = this._isPinned ? 'Unpin results' : 'Pin results';
       btn.innerHTML = `<img src="${src}" class="hugr-btn-icon" alt="${title}">`;
       btn.title = title;
