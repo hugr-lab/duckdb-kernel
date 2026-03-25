@@ -14,5 +14,7 @@ def _jupyter_server_extension_points():
 
 
 def _load_jupyter_server_extension(serverapp):
-    """Register the HUGR Perspective Viewer extension."""
-    serverapp.log.info("HUGR Perspective Viewer extension loaded (Arrow served by Go kernel)")
+    """Register the HUGR Perspective Viewer extension with spool proxy routes."""
+    from .spool_proxy import setup_handlers
+    setup_handlers(serverapp.web_app)
+    serverapp.log.info("HUGR Perspective Viewer extension loaded (spool proxy enabled)")

@@ -8,7 +8,8 @@
 
 import { IRenderMime } from '@jupyterlab/rendermime-interfaces';
 import { Widget } from '@lumino/widgets';
-import { registerMapPlugin } from './map-plugin';
+import { registerMapPlugin, setMapPluginFetchInit } from '@hugr-lab/perspective-core';
+import { hasSpoolProxy, buildArrowStreamUrl, buildSpoolUrl, getSpoolFetchInit, getSpoolMutatingFetchInit, getNotebookDir } from './spoolUrl';
 
 const MIME_TYPE = 'application/vnd.hugr.result+json';
 
@@ -88,6 +89,8 @@ function loadPerspective(): Promise<any> {
     }
 
     await customElements.whenDefined('perspective-viewer');
+    // Configure map plugin with auth headers for Arrow fetch
+    setMapPluginFetchInit(() => getSpoolFetchInit());
     await registerMapPlugin();
     return perspective;
   })();
@@ -133,9 +136,9 @@ function parseTruncation(arrowUrl: string): {
 
 function buildFullUrl(arrowUrl: string): string {
   try {
-    // First rebuild with current base URL (handles port changes after reload)
-    const rebuilt = rebuildArrowUrl(arrowUrl);
-    const url = new URL(rebuilt);
+    // Resolve through spool proxy if available, then remove limit/total
+    const resolved = resolveArrowUrl(rebuildArrowUrl(arrowUrl));
+    const url = new URL(resolved);
     url.searchParams.delete('limit');
     url.searchParams.delete('total');
     return url.toString();
@@ -151,6 +154,11 @@ let _lastKnownBaseUrl: string | null = null;
 /** Module-level set of pinned query IDs — survives widget recreation on cell re-run. */
 const _pinnedQueryIds = new Set<string>();
 
+/** FIFO queue: when a pinned widget is disposed (cell re-run), old query IDs
+ *  are pushed here. The next widget's renderModel shifts them to restore pin
+ *  state and clean up old files. Safe because JupyterLab runs cells sequentially. */
+const _pendingPinRestore: string[][] = [];
+
 // Listen for base URL updates from plugin.ts (kernel reconnect after reload)
 document.addEventListener('hugr:base-url-update', ((e: CustomEvent) => {
   if (e.detail?.baseUrl) {
@@ -159,8 +167,11 @@ document.addEventListener('hugr:base-url-update', ((e: CustomEvent) => {
 }) as EventListener);
 
 /** Rebuild Arrow URL using the latest known kernel base URL.
- *  Extracts queryID from old URL and builds new URL with current port. */
+ *  Extracts queryID from old URL and builds new URL with current port.
+ *  Skips if URL is already a spool proxy URL. */
 function rebuildArrowUrl(oldUrl: string, baseUrl?: string): string {
+  // Don't rewrite spool proxy URLs — they go through Jupyter server, not kernel
+  if (oldUrl.includes('/hugr/spool/')) return oldUrl;
   const base = baseUrl || _lastKnownBaseUrl;
   if (!base) return oldUrl;
   try {
@@ -172,6 +183,27 @@ function rebuildArrowUrl(oldUrl: string, baseUrl?: string): string {
     return rebuilt.toString();
   } catch {
     return oldUrl;
+  }
+}
+
+/**
+ * Resolve Arrow URL: if spool proxy is available, rewrite kernel direct URL
+ * to go through the proxy. Otherwise return as-is.
+ */
+function resolveArrowUrl(arrowUrl: string): string {
+  if (!hasSpoolProxy()) return arrowUrl;
+  try {
+    const url = new URL(arrowUrl);
+    const queryId = url.searchParams.get('q');
+    if (!queryId) return arrowUrl;
+    return buildArrowStreamUrl(queryId, {
+      geoarrow: url.searchParams.has('geoarrow'),
+      limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
+      total: url.searchParams.has('total') ? Number(url.searchParams.get('total')) : undefined,
+      columns: url.searchParams.has('columns') ? url.searchParams.get('columns')!.split(',') : undefined,
+    });
+  } catch {
+    return arrowUrl;
   }
 }
 
@@ -190,10 +222,12 @@ async function streamArrowToTable(
   perspectiveWorker: any,
   signal?: AbortSignal,
 ): Promise<any> {
+  const fetchInit = getSpoolFetchInit(signal);
+
   // Try fetch, retry with rebuilt URL on connection error (port may have changed after reload)
   let response: Response | undefined;
   try {
-    response = await fetch(arrowUrl, { signal });
+    response = await fetch(arrowUrl, fetchInit);
   } catch {
     // Connection error — wait for kernel base URL discovery, then retry
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -201,7 +235,7 @@ async function streamArrowToTable(
       const rebuilt = rebuildArrowUrl(arrowUrl);
       if (rebuilt !== arrowUrl) {
         try {
-          response = await fetch(rebuilt, { signal });
+          response = await fetch(rebuilt, fetchInit);
           break;
         } catch { /* retry */ }
       }
@@ -280,8 +314,10 @@ interface ArrowPartState {
 
 export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
   private _mimeType: string;
+  private _model: IRenderMime.IMimeModel | null = null;
   private _prevQueryIds: string[] = [];
   private _isPinned = false;
+  private _skipRender = false;
   private _arrowParts: ArrowPartState[] = [];
   private _lazyRender: ((idx: number) => Promise<void>) | null = null;
   private _resizeObserver: ResizeObserver | null = null;
@@ -293,6 +329,9 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
   }
 
   async renderModel(model: IRenderMime.IMimeModel): Promise<void> {
+    // Guard: setData in _savePinMetadata may trigger re-render callback
+    if (this._skipRender) return;
+    this._model = model;
     const metadata = model.data[this._mimeType] as unknown as MultipartMetadata;
     if (!metadata) {
       this._showError('No result metadata available.');
@@ -320,15 +359,31 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
     }
     if (newIds.length > 0) this._prevQueryIds = newIds;
 
-    // Restore pin state: check module-level set first, then ask backend
+    // --- Restore pin state ---
+    // 1. FIFO: disposed pinned widget pushed old IDs (cell re-run)
+    if (!this._isPinned && _pendingPinRestore.length > 0) {
+      const restoredIds = _pendingPinRestore.shift()!;
+      this._isPinned = true;
+      for (const id of restoredIds) {
+        if (!oldQueryIds.includes(id)) oldQueryIds.push(id);
+      }
+    }
+    // 2. Module-level set (same widget re-render)
     if (!this._isPinned && oldQueryIds.some(id => _pinnedQueryIds.has(id))) {
       this._isPinned = true;
     }
+    // 3. Output metadata (page reload — saved in .ipynb)
+    if (!this._isPinned) {
+      const meta = model.metadata['application/vnd.hugr.result+json'] as any;
+      if (meta?.pinned) {
+        this._isPinned = true;
+      }
+    }
+    // 4. Backend is_pinned (fallback — file on disk)
     if (!this._isPinned && baseUrl && newIds.length > 0) {
-      // Check backend for pin status (handles page reload case)
       for (const id of newIds) {
         try {
-          const resp = await fetch(`${baseUrl}/spool/is_pinned?query_id=${id}`);
+          const resp = await fetch(buildSpoolUrl('is_pinned', id, { kernelBaseUrl: baseUrl, dir: getNotebookDir() ?? undefined }), getSpoolFetchInit());
           if (resp.ok) {
             const data = await resp.json();
             if (data.pinned) {
@@ -341,23 +396,26 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       }
     }
 
-    // Render and then clean up old spool files + auto-pin if cell was pinned
+    // --- Cleanup old + auto-pin new ---
     const cleanupOld = () => {
+      const dir = getNotebookDir() ?? undefined;
+      // Delete old results (spool + pinned files)
       if (oldQueryIds.length > 0 && baseUrl) {
         for (const id of oldQueryIds) {
           _pinnedQueryIds.delete(id);
-          fetch(`${baseUrl}/spool/delete?query_id=${id}`, { method: 'DELETE' }).catch(() => {});
+          fetch(buildSpoolUrl('delete', id, { kernelBaseUrl: baseUrl, dir }), getSpoolMutatingFetchInit('DELETE')).catch(() => {});
         }
       }
       // Auto-pin new results if this cell was previously pinned
-      // Skip IDs that are already pinned (e.g. after page reload)
-      if (this._isPinned && baseUrl && newIds.length > 0) {
+      if (this._isPinned && baseUrl && newIds.length > 0 && dir) {
         for (const id of newIds) {
           if (!_pinnedQueryIds.has(id)) {
             _pinnedQueryIds.add(id);
-            fetch(`${baseUrl}/spool/pin?query_id=${id}`, { method: 'POST' }).catch(() => {});
+            fetch(buildSpoolUrl('pin', id, { kernelBaseUrl: baseUrl, dir }), getSpoolMutatingFetchInit('POST')).catch(() => {});
           }
         }
+        // Note: pin metadata is saved only on explicit pin button click,
+        // not here — model.setData() triggers re-render causing infinite loop.
       }
     };
 
@@ -628,7 +686,10 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       return;
     }
 
-    const truncation = parseTruncation(part.arrow_url);
+    // Rewrite URL to use spool proxy if available
+    part = { ...part, arrow_url: resolveArrowUrl(part.arrow_url!) };
+
+    const truncation = parseTruncation(part.arrow_url!);
 
     // Status banner
     const statusParts: string[] = [];
@@ -951,7 +1012,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
 
   /** Backward-compatible: render single Arrow result from flat fields. */
   private async _renderSingleArrow(metadata: FlatMetadata): Promise<void> {
-    const arrowUrl = rebuildArrowUrl(metadata.arrow_url!);
+    const arrowUrl = resolveArrowUrl(rebuildArrowUrl(metadata.arrow_url!));
     const truncation = parseTruncation(arrowUrl);
 
     this.node.innerHTML = '<div class="hugr-result-loading">Loading viewer...</div>';
@@ -1083,6 +1144,25 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
     this._arrowParts = remaining;
   }
 
+  /** Save pin state to output metadata — persists in .ipynb across page reload.
+   *  Uses _skipRender guard to prevent re-render loop from setData callback. */
+  private _savePinMetadata(pinned: boolean): void {
+    if (!this._model) return;
+    try {
+      this._skipRender = true;
+      const existing = (this._model.metadata['application/vnd.hugr.result+json'] as any) || {};
+      this._model.setData({
+        metadata: {
+          ...this._model.metadata,
+          'application/vnd.hugr.result+json': { ...existing, pinned },
+        },
+      });
+    } catch { /* setData may not be available in all contexts */ }
+    finally {
+      this._skipRender = false;
+    }
+  }
+
   private async _cleanup(): Promise<void> {
     this._lazyRender = null;
     if (this._resizeObserver) { this._resizeObserver.disconnect(); this._resizeObserver = null; }
@@ -1096,11 +1176,16 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
   }
 
   dispose(): void {
-    // Delete spool files when cell/widget is removed — but skip pinned ones
+    // Push pin state for FIFO restore (next widget picks it up on cell re-run)
+    if (this._isPinned && this._prevQueryIds.length > 0) {
+      _pendingPinRestore.push([...this._prevQueryIds]);
+    }
+    // Delete spool files when cell/widget is removed — skip pinned ones
     if (this._prevQueryIds.length > 0 && _lastKnownBaseUrl) {
+      const dir = getNotebookDir() ?? undefined;
       for (const id of this._prevQueryIds) {
         if (!_pinnedQueryIds.has(id)) {
-          fetch(`${_lastKnownBaseUrl}/spool/delete?query_id=${id}`, { method: 'DELETE' }).catch(() => {});
+          fetch(buildSpoolUrl('delete', id, { kernelBaseUrl: _lastKnownBaseUrl!, dir }), getSpoolMutatingFetchInit('DELETE')).catch(() => {});
         }
       }
     }
@@ -1147,7 +1232,9 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       const endpoint = wasPinned ? 'unpin' : 'pin';
 
       try {
-        const resp = await fetch(`${base}/spool/${endpoint}?query_id=${qid}`, { method: 'POST' });
+        const dir = getNotebookDir() ?? undefined;
+        const url = buildSpoolUrl(endpoint as 'pin' | 'unpin', qid, { kernelBaseUrl: base, dir });
+        const resp = await fetch(url, getSpoolMutatingFetchInit('POST'));
         if (resp.ok) {
           this._isPinned = !wasPinned;
           if (this._isPinned) {
@@ -1155,6 +1242,7 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
           } else {
             _pinnedQueryIds.delete(qid);
           }
+          this._savePinMetadata(this._isPinned);
           updateLabel();
         } else {
           btn.textContent = 'Error';

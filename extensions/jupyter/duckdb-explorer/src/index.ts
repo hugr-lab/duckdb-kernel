@@ -2,6 +2,7 @@
  * JupyterLab application plugin: DuckDB Explorer sidebar.
  *
  * Discovers the kernel's base_url and shows a database object tree.
+ * Independent of perspective-viewer — works without it installed.
  */
 
 import {
@@ -10,14 +11,11 @@ import {
   ILayoutRestorer,
 } from '@jupyterlab/application';
 import { INotebookTracker } from '@jupyterlab/notebook';
-import { MainAreaWidget } from '@jupyterlab/apputils';
 import { DuckDBSidebarWidget } from './sidebar.js';
 import { IntrospectClient } from './introspectClient.js';
-import { PerspectiveTabWidget } from './perspectiveTab.js';
-import { JsonTabWidget } from './jsonTab.js';
 
 const sidebarPlugin: JupyterFrontEndPlugin<void> = {
-  id: '@hugr-lab/perspective-viewer:sidebar',
+  id: '@hugr-lab/duckdb-explorer:sidebar',
   autoStart: true,
   requires: [INotebookTracker],
   optional: [ILayoutRestorer],
@@ -27,24 +25,6 @@ const sidebarPlugin: JupyterFrontEndPlugin<void> = {
     restorer: ILayoutRestorer | null,
   ) => {
     console.log('[DuckDB Explorer] Sidebar plugin activated');
-
-    document.addEventListener('hugr:open-in-tab', ((e: CustomEvent) => {
-      const { arrowUrl, title, geometryColumns, tileSources } = e.detail;
-      const content = new PerspectiveTabWidget(arrowUrl, title, geometryColumns, tileSources);
-      const widget = new MainAreaWidget({ content });
-      widget.title.label = title || 'Result';
-      widget.title.closable = true;
-      app.shell.add(widget, 'main');
-    }) as EventListener);
-
-    document.addEventListener('hugr:open-json-in-tab', ((e: CustomEvent) => {
-      const { data, title } = e.detail;
-      const content = new JsonTabWidget(data, title);
-      const widget = new MainAreaWidget({ content });
-      widget.title.label = title || 'JSON';
-      widget.title.closable = true;
-      app.shell.add(widget, 'main');
-    }) as EventListener);
 
     const sidebar = new DuckDBSidebarWidget();
 
@@ -73,7 +53,7 @@ const sidebarPlugin: JupyterFrontEndPlugin<void> = {
         if (baseUrl && baseUrl !== discoveredUrl) {
           discoveredUrl = baseUrl;
           sidebar.setClient(new IntrospectClient(baseUrl));
-          // Broadcast base URL for widget.ts Arrow URL rebuilding
+          // Broadcast base URL for other extensions (e.g., perspective-viewer)
           document.dispatchEvent(new CustomEvent('hugr:base-url-update', { detail: { baseUrl } }));
         }
       } catch {
@@ -81,9 +61,14 @@ const sidebarPlugin: JupyterFrontEndPlugin<void> = {
       }
     };
 
-    notebookTracker.currentChanged.connect(() => void tryDiscover());
+    notebookTracker.currentChanged.connect(() => {
+      void tryDiscover();
+    });
+
     notebookTracker.widgetAdded.connect((_sender, panel) => {
-      const onStatusChanged = () => void tryDiscover();
+      const onStatusChanged = () => {
+        void tryDiscover();
+      };
       panel.sessionContext.statusChanged.connect(onStatusChanged);
       panel.disposed.connect(() => {
         panel.sessionContext.statusChanged.disconnect(onStatusChanged);

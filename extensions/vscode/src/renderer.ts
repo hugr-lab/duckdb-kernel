@@ -7,7 +7,7 @@
  */
 
 import type { ActivationFunction } from 'vscode-notebook-renderer';
-import { registerMapPlugin } from './map-plugin';
+import { registerMapPlugin } from '@hugr-lab/perspective-core';
 
 /** Geometry column metadata from Arrow schema detection. */
 interface GeometryColumnMeta {

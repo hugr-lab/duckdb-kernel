@@ -116,7 +116,8 @@ func (k *Kernel) Start(ctx context.Context) error {
 	}
 
 	// Start Arrow HTTP server for direct file serving and introspection.
-	if k.spool != nil {
+	// Skip if spool proxy handles serving (JupyterHub/Docker).
+	if k.spool != nil && os.Getenv("HUGR_SPOOL_PROXY") == "" {
 		introspector := engine.NewIntrospector(k.session.Engine, k.session.ID)
 		as, err := NewArrowServer(k.spool, introspector)
 		if err != nil {

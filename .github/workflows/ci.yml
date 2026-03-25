@@ -80,7 +80,7 @@ jobs:
       - name: Run integration tests
         run: python -m pytest tests/integration_test.py -v
 
-  build-jupyterlab:
+  build-jupyter:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -96,16 +96,39 @@ jobs:
       - name: Install JupyterLab build tools
         run: pip install jupyterlab>=4.0.0
 
-      - name: Build labextension
-        working-directory: extensions/jupyterlab
+      - name: Build perspective-core
+        working-directory: extensions/perspective-core
         run: |
-          jlpm install
-          jlpm build:prod
+          npm install
+          npm run build
 
-      - name: Verify labextension output
+      - name: Verify no platform imports in core
         run: |
-          test -d extensions/jupyterlab/hugr_perspective/labextension/static
-          echo "labextension build OK"
+          ! grep -r '@jupyterlab\|vscode\|@lumino' extensions/perspective-core/lib/
+          echo "No platform imports found — OK"
+
+      - name: Install JupyterLab workspace dependencies
+        working-directory: extensions/jupyter
+        run: jlpm install
+
+      - name: Build perspective-viewer
+        working-directory: extensions/jupyter/perspective-viewer
+        run: jlpm build:prod
+
+      - name: Verify perspective-viewer output
+        run: |
+          test -d extensions/jupyter/perspective-viewer/hugr_perspective/labextension/static
+          test -f extensions/jupyter/perspective-viewer/hugr_perspective/spool_proxy.py
+          echo "perspective-viewer build OK"
+
+      - name: Build duckdb-explorer
+        working-directory: extensions/jupyter/duckdb-explorer
+        run: jlpm build:prod
+
+      - name: Verify duckdb-explorer output
+        run: |
+          test -d extensions/jupyter/duckdb-explorer/hugr_duckdb_explorer/labextension/static
+          echo "duckdb-explorer build OK"
 
   build-vscode:
     runs-on: ubuntu-latest
@@ -116,13 +139,20 @@ jobs:
         with:
           node-version: 24
 
+      - name: Build perspective-core
+        working-directory: extensions/perspective-core
+        run: |
+          npm install
+          npm run build
+
       - name: Build VS Code extension
         working-directory: extensions/vscode
         run: |
           npm install
           npm run build
 
-      - name: Verify renderer output
+      - name: Verify VS Code output
         run: |
           test -f extensions/vscode/out/renderer.js
+          test -f extensions/vscode/out/perspective-panel.js
           echo "VS Code extension build OK"

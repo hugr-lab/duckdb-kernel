@@ -83,7 +83,12 @@ function noKernelItem(): TreeNode {
 }
 
 function errorItem(err: any): TreeNode {
-  return { type: 'info', label: `Error: ${err.message ?? err}`, collapsible: false, iconId: 'error' };
+  const msg = err?.message ?? String(err);
+  // Connection errors → show friendly placeholder instead of error
+  if (msg.includes('ECONNREFUSED') || msg.includes('fetch failed') || msg.includes('Failed to fetch') || msg.includes('ENOTFOUND') || msg.includes('socket hang up')) {
+    return { type: 'info', label: 'Run a query to connect', collapsible: false, iconId: 'info' };
+  }
+  return { type: 'info', label: `Error: ${msg}`, collapsible: false, iconId: 'error' };
 }
 
 function groupFunctions(fns: any[]): TreeNode[] {

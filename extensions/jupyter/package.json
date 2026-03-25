@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "workspaces": [
+    "perspective-viewer",
+    "duckdb-explorer"
+  ]
+}

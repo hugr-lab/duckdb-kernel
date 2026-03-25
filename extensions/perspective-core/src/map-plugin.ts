@@ -21,8 +21,16 @@ let BitmapLayer: any;
 let ColumnLayer: any;
 let H3HexagonLayer: any;
 let TileLayer: any;
-
 let _deckPromise: Promise<void> | null = null;
+
+/** Platform-specific fetch init provider. Set by platform extensions before map plugin use. */
+let _mapPluginFetchInit: (() => RequestInit) | null = null;
+
+/** Configure the fetch init provider for Arrow data requests in the map plugin. */
+export function setMapPluginFetchInit(fn: () => RequestInit): void {
+  _mapPluginFetchInit = fn;
+}
+
 function ensureDeckGL(): Promise<void> {
   if (!_deckPromise) {
     _deckPromise = (async () => {
@@ -203,7 +211,10 @@ interface FeatureRow {
  *  Each chunk is a complete IPC message: [4-byte LE length][Arrow IPC bytes].
  *  Returns individual chunks (not concatenated), since each is a standalone IPC stream. */
 async function fetchArrowChunks(url: string): Promise<Uint8Array[]> {
-  const response = await fetch(url);
+  // Use platform-provided fetch init if available, otherwise plain fetch.
+  // The spoolUrl module is platform-specific and not available in core.
+  const fetchInit: RequestInit = (_mapPluginFetchInit) ? _mapPluginFetchInit() : {};
+  const response = await fetch(url, fetchInit);
   if (!response.ok) throw new Error(`Failed to fetch Arrow data (HTTP ${response.status})`);
   if (!response.body) throw new Error('Response body is null');
 
@@ -1329,7 +1340,7 @@ function buildMappedLayers(
 }
 
 // Compass SVG icon for the map plugin selector (16x16)
-// NOTE: Lazily initialized inside registerMapPlugin() to avoid TDZ errors
+// NOTE: These are lazily initialized inside registerMapPlugin() to avoid TDZ errors
 // when top-level deck.gl imports fail (e.g. version conflicts).
 let _mapIconB64: string | null = null;
 function getMapIconB64(): string {
@@ -1769,6 +1780,7 @@ export async function registerMapPlugin(): Promise<void> {
           const neededCols = [geomColName, colorColName, sizeColName, heightColName, ...tooltipColNames]
             .filter((c): c is string => c != null);
           const uniqueCols = [...new Set(neededCols)];
+          // Column projection is applied server-side AFTER GeoArrow conversion, so safe to use
           const colsParam = uniqueCols.length > 0 ? `&columns=${uniqueCols.map(encodeURIComponent).join(',')}` : '';
           const params = `geoarrow=1${colsParam}`;
           geoArrowUrl = arrowUrl + (arrowUrl.includes('?') ? '&' : '?') + params;
@@ -2078,7 +2090,6 @@ export async function registerMapPlugin(): Promise<void> {
           if (isFinite(n)) { if (n < min) min = n; if (n > max) max = n; }
         }
         if (!isFinite(min)) { legend.style.display = 'none'; return; }
-        // Build gradient from current palette
         const stops: string[] = [];
         for (let t = 0; t <= 1; t += 0.05) {
           const c = paletteColor(t);

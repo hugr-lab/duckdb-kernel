@@ -3,34 +3,31 @@ requires = ["hatchling>=1.5.0", "jupyterlab>=4.0.0,<5", "hatch-nodejs-version>=0
 build-backend = "hatchling.build"
 
 [project]
-name = "hugr-perspective-viewer"
+name = "hugr-duckdb-explorer"
 version = "0.1.0"
-description = "Perspective visualization viewer for DuckDB Kernel results"
+description = "DuckDB database explorer sidebar for JupyterLab"
 license = {text = "MIT"}
 requires-python = ">=3.8"
-dependencies = ["jupyter_server>=2.0.0"]
-
-[project.entry-points."jupyter_server.serverextension"]
-hugr_perspective = "hugr_perspective"
+dependencies = ["jupyter_server>=2.14.0"]
 
 [tool.hatch.build]
-artifacts = ["hugr_perspective/labextension"]
+artifacts = ["hugr_duckdb_explorer/labextension"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["hugr_perspective"]
+packages = ["hugr_duckdb_explorer"]
 ignore-vcs = true
 
 [tool.hatch.build.targets.wheel.shared-data]
-"hugr_perspective/labextension" = "share/jupyter/labextensions/@hugr-lab/perspective-viewer"
+"hugr_duckdb_explorer/labextension" = "share/jupyter/labextensions/@hugr-lab/duckdb-explorer"
 
 [tool.hatch.build.hooks.jupyter-builder]
 dependencies = ["hatch-jupyter-builder>=0.5"]
 build-function = "hatch_jupyter_builder.npm_builder"
 ensured-targets = [
-    "hugr_perspective/labextension/static/style.js",
-    "hugr_perspective/labextension/package.json",
+    "hugr_duckdb_explorer/labextension/static/style.js",
+    "hugr_duckdb_explorer/labextension/package.json",
 ]
-skip-if-exists = ["hugr_perspective/labextension/static/style.js"]
+skip-if-exists = ["hugr_duckdb_explorer/labextension/static/style.js"]
 
 [tool.hatch.build.hooks.jupyter-builder.build-kwargs]
 build_cmd = "build:prod"
