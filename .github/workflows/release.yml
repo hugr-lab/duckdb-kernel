@@ -100,7 +100,7 @@ jobs:
       - name: Build perspective-viewer
         working-directory: extensions/perspective-viewer
         run: |
-          rm -f ../package.json ../yarn.lock
+          rm -f ../package.json && touch ../yarn.lock
           jlpm install
           jlpm build:prod
 
@@ -149,7 +149,7 @@ jobs:
       - name: Build duckdb-explorer
         working-directory: extensions/duckdb-explorer
         run: |
-          rm -f ../package.json ../yarn.lock
+          rm -f ../package.json && touch ../yarn.lock
           jlpm install
           jlpm build:prod
 
