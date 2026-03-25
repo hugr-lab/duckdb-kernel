@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
+	"strings"
 	"sync"
+	"time"
 
 	zmq "github.com/go-zeromq/zmq4"
 	"github.com/hugr-lab/duckdb-kernel/internal/engine"
@@ -13,6 +16,9 @@ import (
 	"github.com/hugr-lab/duckdb-kernel/internal/session"
 	"github.com/hugr-lab/duckdb-kernel/internal/spool"
 )
+
+// commHandler is called when a comm_msg is received for a registered comm target.
+type commHandler func(commID string, data map[string]any, parent *Message)
 
 // ConnectionInfo holds the parsed Jupyter connection file data.
 type ConnectionInfo struct {
@@ -48,9 +54,14 @@ type Kernel struct {
 	session      *session.Session
 	spool        *spool.Spool
 	arrowServer  *ArrowServer
+	introspector *engine.Introspector
 	metaRegistry *meta.Registry
 	tileSources  []TileSourceConfig
 	key          []byte
+
+	// Comm protocol support
+	commTargets map[string]commHandler // target_name → handler
+	openComms   map[string]string      // comm_id → target_name
 
 	shellSocket   zmq.Socket
 	controlSocket zmq.Socket
@@ -67,11 +78,13 @@ type Kernel struct {
 // NewKernel creates a new kernel with the given connection info, session, and spool.
 func NewKernel(connInfo *ConnectionInfo, sess *session.Session, sp *spool.Spool) *Kernel {
 	k := &Kernel{
-		connInfo: connInfo,
-		session:  sess,
-		spool:    sp,
-		key:      []byte(connInfo.Key),
-		shutdown: make(chan struct{}),
+		connInfo:    connInfo,
+		session:     sess,
+		spool:       sp,
+		key:         []byte(connInfo.Key),
+		commTargets: make(map[string]commHandler),
+		openComms:   make(map[string]string),
+		shutdown:    make(chan struct{}),
 	}
 	k.metaRegistry = meta.NewRegistry(sess.Engine, sess.SetPreviewLimit, sp)
 	historyDir := os.TempDir()
@@ -80,6 +93,11 @@ func NewKernel(connInfo *ConnectionInfo, sess *session.Session, sp *spool.Spool)
 	}
 	k.history = NewHistory(historyDir, sess.ID)
 	return k
+}
+
+// registerCommTarget registers a handler for the given comm target name.
+func (k *Kernel) registerCommTarget(name string, handler commHandler) {
+	k.commTargets[name] = handler
 }
 
 // SetTileSources configures basemap tile sources for the map plugin.
@@ -115,11 +133,16 @@ func (k *Kernel) Start(ctx context.Context) error {
 		return fmt.Errorf("listen stdin: %w", err)
 	}
 
+	// Introspector — always available (used by comm protocol and HTTP).
+	k.introspector = engine.NewIntrospector(k.session.Engine, k.session.ID)
+
+	// Register comm targets.
+	k.registerCommTarget("duckdb.introspect", k.handleIntrospectComm)
+
 	// Start Arrow HTTP server for direct file serving and introspection.
 	// Skip if spool proxy handles serving (JupyterHub/Docker).
 	if k.spool != nil && os.Getenv("HUGR_SPOOL_PROXY") == "" {
-		introspector := engine.NewIntrospector(k.session.Engine, k.session.ID)
-		as, err := NewArrowServer(k.spool, introspector)
+		as, err := NewArrowServer(k.spool, k.introspector)
 		if err != nil {
 			log.Printf("Warning: failed to start Arrow HTTP server: %v", err)
 		} else {
@@ -258,6 +281,94 @@ func (k *Kernel) sendMessage(socket zmq.Socket, msg *Message) error {
 	}
 	zmqMsg := zmq.NewMsgFrom(frames...)
 	return socket.Send(zmqMsg)
+}
+
+// handleIntrospectComm handles comm_msg for the "duckdb.introspect" target.
+func (k *Kernel) handleIntrospectComm(commID string, data map[string]any, parent *Message) {
+	requestID, _ := data["request_id"].(string)
+	typ, _ := data["type"].(string)
+	database, _ := data["database"].(string)
+	schema, _ := data["schema"].(string)
+	table, _ := data["table"].(string)
+
+	var result any
+	var err error
+
+	if typ == "spool_files" && k.spool != nil {
+		result, err = k.spoolFiles()
+	} else {
+		ctx := context.Background()
+		result, err = k.introspector.Query(ctx, typ, database, schema, table)
+	}
+
+	reply := NewMessage(parent, "comm_msg")
+	if err != nil {
+		reply.Content = map[string]any{
+			"comm_id": commID,
+			"data": map[string]any{
+				"request_id": requestID,
+				"error":      err.Error(),
+			},
+		}
+	} else {
+		reply.Content = map[string]any{
+			"comm_id": commID,
+			"data": map[string]any{
+				"request_id": requestID,
+				"type":       typ,
+				"data":       result,
+			},
+		}
+	}
+	if err := k.sendMessage(k.iopubSocket, reply); err != nil {
+		log.Printf("send introspect comm_msg error: %v", err)
+	}
+}
+
+// spoolFiles lists Arrow spool files with metadata, sorted newest first.
+func (k *Kernel) spoolFiles() ([]map[string]any, error) {
+	entries, err := os.ReadDir(k.spool.Dir)
+	if err != nil {
+		return []map[string]any{}, nil
+	}
+
+	type fileEntry struct {
+		name    string
+		size    int64
+		modTime time.Time
+	}
+
+	var files []fileEntry
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".arrow") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, fileEntry{
+			name:    entry.Name(),
+			size:    info.Size(),
+			modTime: info.ModTime(),
+		})
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].modTime.After(files[j].modTime)
+	})
+
+	results := make([]map[string]any, len(files))
+	for i, f := range files {
+		queryID := strings.TrimSuffix(f.name, ".arrow")
+		results[i] = map[string]any{
+			"query_id":   queryID,
+			"size_bytes": f.size,
+			"created_at": f.modTime.UTC().Format(time.RFC3339),
+			"pinned":     k.spool.IsPinned(queryID),
+		}
+	}
+	return results, nil
 }
 
 func (k *Kernel) publishStatus(parent *Message, status string) {

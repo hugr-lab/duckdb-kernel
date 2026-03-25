@@ -1,8 +1,9 @@
 /**
  * JupyterLab application plugin: DuckDB Explorer sidebar.
  *
- * Discovers the kernel's base_url and shows a database object tree.
- * Independent of perspective-viewer — works without it installed.
+ * Discovers the kernel via notebook tracker and connects the sidebar
+ * using Jupyter Comm protocol for introspection.
+ * Independent of perspective-viewer -- works without it installed.
  */
 
 import {
@@ -12,7 +13,9 @@ import {
 } from '@jupyterlab/application';
 import { INotebookTracker } from '@jupyterlab/notebook';
 import { DuckDBSidebarWidget } from './sidebar.js';
-import { IntrospectClient } from './introspectClient.js';
+import { CommIntrospectClient } from './introspectClient.js';
+import type { IIntrospectClient } from './introspectClient.js';
+import type { Kernel } from '@jupyterlab/services';
 
 const sidebarPlugin: JupyterFrontEndPlugin<void> = {
   id: '@hugr-lab/duckdb-explorer:sidebar',
@@ -34,44 +37,78 @@ const sidebarPlugin: JupyterFrontEndPlugin<void> = {
       restorer.add(sidebar, 'duckdb-explorer-sidebar');
     }
 
-    let discoveredUrl: string | null = null;
+    let currentClient: IIntrospectClient | null = null;
+    let currentKernel: Kernel.IKernelConnection | null = null;
 
-    const tryDiscover = async () => {
+    const connectToKernel = () => {
       const panel = notebookTracker.currentWidget;
-      if (!panel) return;
+      if (!panel) {
+        disposeClient();
+        sidebar.setClient(null);
+        return;
+      }
 
       const sessionContext = panel.sessionContext;
       if (!sessionContext?.session?.kernel) return;
 
       const kernel = sessionContext.session.kernel;
 
+      // Avoid reconnecting to the same kernel.
+      if (currentKernel === kernel && currentClient) return;
+
+      disposeClient();
+
       try {
-        const reply = await kernel.requestKernelInfo();
-        if (!reply) return;
-        const content = reply.content as any;
-        const baseUrl = content?.hugr_base_url;
-        if (baseUrl && baseUrl !== discoveredUrl) {
-          discoveredUrl = baseUrl;
-          sidebar.setClient(new IntrospectClient(baseUrl));
-          // Broadcast base URL for other extensions (e.g., perspective-viewer)
-          document.dispatchEvent(new CustomEvent('hugr:base-url-update', { detail: { baseUrl } }));
-        }
+        currentKernel = kernel;
+        const client = new CommIntrospectClient(kernel);
+        currentClient = client;
+        sidebar.setClient(client);
+        console.log('[DuckDB Explorer] Connected via comm');
+
+        // Broadcast base URL for other extensions (e.g., perspective-viewer).
+        kernel.requestKernelInfo().then((reply) => {
+          if (reply) {
+            const content = reply.content as any;
+            const baseUrl = content?.hugr_base_url;
+            if (baseUrl) {
+              document.dispatchEvent(
+                new CustomEvent('hugr:base-url-update', { detail: { baseUrl } }),
+              );
+            }
+          }
+        }).catch(() => {
+          // Kernel may not support hugr_base_url.
+        });
       } catch {
-        // Kernel may not support hugr_base_url.
+        // Kernel may not be ready yet.
       }
     };
 
+    const disposeClient = () => {
+      if (currentClient?.dispose) {
+        currentClient.dispose();
+      }
+      currentClient = null;
+      currentKernel = null;
+    };
+
     notebookTracker.currentChanged.connect(() => {
-      void tryDiscover();
+      connectToKernel();
     });
 
     notebookTracker.widgetAdded.connect((_sender, panel) => {
       const onStatusChanged = () => {
-        void tryDiscover();
+        if (panel === notebookTracker.currentWidget) {
+          connectToKernel();
+        }
       };
       panel.sessionContext.statusChanged.connect(onStatusChanged);
       panel.disposed.connect(() => {
         panel.sessionContext.statusChanged.disconnect(onStatusChanged);
+        if (panel === notebookTracker.currentWidget) {
+          disposeClient();
+          sidebar.setClient(null);
+        }
       });
     });
   },
