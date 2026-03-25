@@ -96,36 +96,38 @@ jobs:
       - name: Install JupyterLab build tools
         run: pip install jupyterlab>=4.0.0
 
-      - name: Install workspace dependencies
-        working-directory: extensions
-        run: jlpm install
-
       - name: Build perspective-core
         working-directory: extensions/perspective-core
-        run: npm run build
+        run: |
+          npm install
+          npm run build
 
       - name: Verify no platform imports in core
         run: |
           ! grep -r '@jupyterlab\|vscode\|@lumino' extensions/perspective-core/lib/
           echo "No platform imports found — OK"
 
+      - name: Install JupyterLab workspace dependencies
+        working-directory: extensions/jupyter
+        run: jlpm install
+
       - name: Build perspective-viewer
-        working-directory: extensions/perspective-viewer
+        working-directory: extensions/jupyter/perspective-viewer
         run: jlpm build:prod
 
       - name: Verify perspective-viewer output
         run: |
-          test -d extensions/perspective-viewer/hugr_perspective/labextension/static
-          test -f extensions/perspective-viewer/hugr_perspective/spool_proxy.py
+          test -d extensions/jupyter/perspective-viewer/hugr_perspective/labextension/static
+          test -f extensions/jupyter/perspective-viewer/hugr_perspective/spool_proxy.py
           echo "perspective-viewer build OK"
 
       - name: Build duckdb-explorer
-        working-directory: extensions/duckdb-explorer
+        working-directory: extensions/jupyter/duckdb-explorer
         run: jlpm build:prod
 
       - name: Verify duckdb-explorer output
         run: |
-          test -d extensions/duckdb-explorer/hugr_duckdb_explorer/labextension/static
+          test -d extensions/jupyter/duckdb-explorer/hugr_duckdb_explorer/labextension/static
           echo "duckdb-explorer build OK"
 
   build-vscode:
@@ -140,13 +142,13 @@ jobs:
       - name: Build perspective-core
         working-directory: extensions/perspective-core
         run: |
-          npm install --no-workspaces
+          npm install
           npm run build
 
       - name: Build VS Code extension
         working-directory: extensions/vscode
         run: |
-          npm install --no-workspaces
+          npm install
           npm run build
 
       - name: Verify VS Code output

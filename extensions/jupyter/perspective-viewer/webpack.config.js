@@ -70,7 +70,7 @@ module.exports = {
         // CSS themes
         pspAsset('viewer/dist/css/themes.css'),
         // Icons
-        { from: path.resolve(__dirname, '../../icons'), to: 'icons/[name][ext]' },
+        { from: path.resolve(__dirname, '../../../icons'), to: 'icons/[name][ext]' },
       ],
     }),
   ],

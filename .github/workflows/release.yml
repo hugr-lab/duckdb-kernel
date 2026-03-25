@@ -89,49 +89,51 @@ jobs:
       - name: Set version from tag
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          sed -i "s/^version = .*/version = \"$VERSION\"/" extensions/perspective-viewer/pyproject.toml
-          sed -i "s/^version = .*/version = \"$VERSION\"/" extensions/duckdb-explorer/pyproject.toml
-
-      - name: Install workspace dependencies
-        working-directory: extensions
-        run: jlpm install
+          sed -i "s/^version = .*/version = \"$VERSION\"/" extensions/jupyter/perspective-viewer/pyproject.toml
+          sed -i "s/^version = .*/version = \"$VERSION\"/" extensions/jupyter/duckdb-explorer/pyproject.toml
 
       - name: Build perspective-core
         working-directory: extensions/perspective-core
-        run: npm run build
+        run: |
+          npm install
+          npm run build
+
+      - name: Install JupyterLab workspace dependencies
+        working-directory: extensions/jupyter
+        run: jlpm install
 
       - name: Build perspective-viewer
-        working-directory: extensions/perspective-viewer
+        working-directory: extensions/jupyter/perspective-viewer
         run: jlpm build:prod
 
       - name: Build perspective-viewer wheel
-        working-directory: extensions/perspective-viewer
+        working-directory: extensions/jupyter/perspective-viewer
         run: python -m build
 
       - name: Create perspective-static tarball
         run: |
           tar -czf perspective-static.tar.gz \
-            -C extensions/perspective-viewer/hugr_perspective/labextension/static perspective
+            -C extensions/jupyter/perspective-viewer/hugr_perspective/labextension/static perspective
 
       - name: Build duckdb-explorer
-        working-directory: extensions/duckdb-explorer
+        working-directory: extensions/jupyter/duckdb-explorer
         run: jlpm build:prod
 
       - name: Build duckdb-explorer wheel
-        working-directory: extensions/duckdb-explorer
+        working-directory: extensions/jupyter/duckdb-explorer
         run: python -m build
 
       - name: Upload perspective-viewer wheel
         uses: actions/upload-artifact@v4
         with:
           name: perspective-viewer-wheel
-          path: extensions/perspective-viewer/dist/*.whl
+          path: extensions/jupyter/perspective-viewer/dist/*.whl
 
       - name: Upload duckdb-explorer wheel
         uses: actions/upload-artifact@v4
         with:
           name: duckdb-explorer-wheel
-          path: extensions/duckdb-explorer/dist/*.whl
+          path: extensions/jupyter/duckdb-explorer/dist/*.whl
 
       - name: Upload perspective static files
         uses: actions/upload-artifact@v4
@@ -157,13 +159,13 @@ jobs:
       - name: Build perspective-core
         working-directory: extensions/perspective-core
         run: |
-          npm install --no-workspaces
+          npm install
           npm run build
 
       - name: Build VS Code extension
         working-directory: extensions/vscode
         run: |
-          npm install --no-workspaces
+          npm install
           npm run build
 
       - name: Package VSIX

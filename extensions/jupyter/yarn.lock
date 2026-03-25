@@ -767,25 +767,17 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@hugr-lab/perspective-core@workspace:*, @hugr-lab/perspective-core@workspace:perspective-core":
-  version: 0.0.0-use.local
-  resolution: "@hugr-lab/perspective-core@workspace:perspective-core"
-  dependencies:
-    "@deck.gl/core": ^9.2.11
-    "@deck.gl/geo-layers": ^9.2.11
-    "@deck.gl/layers": ^9.2.11
-    "@geoarrow/deck.gl-layers": ^0.3.1
-    "@geoarrow/geoarrow-wasm": ^0.2.0-beta.5
-    apache-arrow: ^21.1.0
-    rimraf: ^5.0.0
-    typescript: ~5.8.0
+"@hugr-lab/perspective-core@file:../../perspective-core::locator=%40hugr-lab%2Fperspective-viewer%40workspace%3Aperspective-viewer":
+  version: 0.1.0
+  resolution: "@hugr-lab/perspective-core@file:../../perspective-core#../../perspective-core::hash=b9bfd6&locator=%40hugr-lab%2Fperspective-viewer%40workspace%3Aperspective-viewer"
   peerDependencies:
     "@deck.gl/core": ">=9.0.0"
     "@deck.gl/geo-layers": ">=9.0.0"
     "@deck.gl/layers": ">=9.0.0"
     apache-arrow: ">=17.0.0"
-  languageName: unknown
-  linkType: soft
+  checksum: f45f6c487a6467f02d734fb4a97d575d786b0f2d084fd61ee327816fa65533b3973ecc5fd9fc30b248a9aef84ece8120780cac838754f4cb9a578fdcd06e3b57
+  languageName: node
+  linkType: hard
 
 "@hugr-lab/perspective-viewer@workspace:perspective-viewer":
   version: 0.0.0-use.local
@@ -799,7 +791,7 @@ __metadata:
     "@deck.gl/mesh-layers": ^9.2.11
     "@geoarrow/deck.gl-layers": ^0.3.1
     "@geoarrow/geoarrow-wasm": ^0.2.0-beta.5
-    "@hugr-lab/perspective-core": "workspace:*"
+    "@hugr-lab/perspective-core": "file:../../perspective-core"
     "@jupyterlab/application": ^4.0.0
     "@jupyterlab/apputils": ^4.0.0
     "@jupyterlab/builder": ^4.0.0
@@ -6010,13 +6002,13 @@ __metadata:
   linkType: hard
 
 "katex@npm:^0.16.25":
-  version: 0.16.40
-  resolution: "katex@npm:0.16.40"
+  version: 0.16.42
+  resolution: "katex@npm:0.16.42"
   dependencies:
     commander: ^8.3.0
   bin:
     katex: cli.js
-  checksum: 3bac7c4880c4942414f932ad369fc1ce299d2c66c554b9f10ae36b390187db24b5ec456bf1bf035008dd0b52996aa6f52fa6d4c39c40fb5aa59382a849d25fc2
+  checksum: 5c4dbfc230410cf2fba23ccdb2f68f88b6fb4af228ea57c65137eba8b43a7677f038d7ec456a2761d18ed3a0654bdb8fc28aa1cae4de86dcae41d0a8977af6eb
   languageName: node
   linkType: hard
 
@@ -7078,7 +7070,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"rimraf@npm:^5.0.0, rimraf@npm:^5.0.1":
+"rimraf@npm:^5.0.1":
   version: 5.0.10
   resolution: "rimraf@npm:5.0.10"
   dependencies:

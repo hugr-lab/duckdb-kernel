@@ -35,10 +35,10 @@ node_modules/
 
 # Extension build outputs
 extensions/perspective-core/lib/
-extensions/perspective-viewer/lib/
-extensions/perspective-viewer/hugr_perspective/labextension/
-extensions/duckdb-explorer/lib/
-extensions/duckdb-explorer/hugr_duckdb_explorer/labextension/
+extensions/jupyter/perspective-viewer/lib/
+extensions/jupyter/perspective-viewer/hugr_perspective/labextension/
+extensions/jupyter/duckdb-explorer/lib/
+extensions/jupyter/duckdb-explorer/hugr_duckdb_explorer/labextension/
 
 # Python (extensions packaging)
 __pycache__/
