@@ -162,90 +162,106 @@ class SpoolStreamHandler(JupyterHandler):
         self.set_header("Cache-Control", "no-cache")
 
         try:
-            reader = ipc.open_stream(pa.OSFile(path, "rb"))
+            source = pa.OSFile(path, "rb")
+            reader = ipc.open_stream(source)
         except Exception as e:
             self.set_status(500)
             self.write({"error": f"failed to open Arrow file: {e}"})
             return
 
-        # Detect geo columns and build output schema
-        do_geo_replace = not geoarrow
-        geo_indices = []
-        out_fields = []
-        col_indices = None
+        try:
 
-        for i, field in enumerate(reader.schema):
-            if do_geo_replace and _is_geo_column(field):
-                geo_indices.append(i)
-                out_fields.append(pa.field(field.name, pa.string()))
-            else:
-                out_fields.append(field)
+            # Detect geo columns and build output schema
+            do_geo_replace = not geoarrow
+            geo_indices = set()
+            out_fields = []
+            col_indices = None
 
-        out_schema = pa.schema(out_fields)
+            for i, field in enumerate(reader.schema):
+                if do_geo_replace and _is_geo_column(field):
+                    geo_indices.add(i)
+                    out_fields.append(pa.field(field.name, pa.string()))
+                else:
+                    out_fields.append(field)
 
-        # Column projection
-        if columns:
-            col_names = set(columns.split(","))
-            col_indices = [i for i, f in enumerate(out_schema) if f.name in col_names]
-            out_schema = pa.schema([out_schema.field(i) for i in col_indices])
-
-        # Row limit
-        row_limit = int(limit) if limit else 0
-        rows_sent = 0
-
-        for batch in reader:
-            if row_limit and rows_sent >= row_limit:
-                break
-
-            # Trim batch if needed
-            if row_limit and rows_sent + batch.num_rows > row_limit:
-                batch = batch.slice(0, row_limit - rows_sent)
-
-            # Geo replacement
-            if geo_indices:
-                new_columns = []
-                for i in range(batch.num_columns):
-                    if i in geo_indices:
-                        new_columns.append(
-                            pa.nulls(batch.num_rows, type=pa.string()).fill_null(GEO_PLACEHOLDER)
-                        )
-                    else:
-                        new_columns.append(batch.column(i))
-
-                fields = []
-                for i, field in enumerate(batch.schema):
-                    if i in geo_indices:
-                        fields.append(pa.field(field.name, pa.string()))
-                    else:
-                        fields.append(field)
-
-                batch = pa.record_batch(new_columns, schema=pa.schema(fields))
+            out_schema = pa.schema(out_fields)
 
             # Column projection
-            if col_indices is not None:
-                batch = pa.record_batch(
-                    [batch.column(i) for i in col_indices],
-                    schema=out_schema,
-                )
+            if columns:
+                col_names = set(columns.split(","))
+                col_indices = [i for i, f in enumerate(out_schema) if f.name in col_names]
+                out_schema = pa.schema([out_schema.field(i) for i in col_indices])
 
-            # Serialize to IPC
-            buf = io.BytesIO()
-            writer = ipc.new_stream(buf, out_schema)
-            writer.write_batch(batch)
-            writer.close()
-            chunk = buf.getvalue()
+            # Pre-build geo placeholder for reuse across batches
+            geo_placeholder_cache: dict[int, pa.Array] = {}
 
-            # Write length-prefixed chunk
-            self.write(struct.pack("<I", len(chunk)))
-            self.write(chunk)
+            # Row limit
+            row_limit = int(limit) if limit else 0
+            rows_sent = 0
+
+            for batch in reader:
+                if row_limit and rows_sent >= row_limit:
+                    break
+
+                # Trim batch if needed
+                if row_limit and rows_sent + batch.num_rows > row_limit:
+                    batch = batch.slice(0, row_limit - rows_sent)
+
+                # Geo replacement
+                if geo_indices:
+                    nrows = batch.num_rows
+                    new_columns = []
+                    for i in range(batch.num_columns):
+                        if i in geo_indices:
+                            # Reuse cached placeholder array if same size
+                            cached = geo_placeholder_cache.get(nrows)
+                            if cached is None:
+                                cached = pa.array([GEO_PLACEHOLDER] * nrows, type=pa.string())
+                                geo_placeholder_cache[nrows] = cached
+                            new_columns.append(cached)
+                        else:
+                            new_columns.append(batch.column(i))
+
+                    fields = []
+                    for i, field in enumerate(batch.schema):
+                        if i in geo_indices:
+                            fields.append(pa.field(field.name, pa.string()))
+                        else:
+                            fields.append(field)
+
+                    batch = pa.record_batch(new_columns, schema=pa.schema(fields))
+
+                # Column projection
+                if col_indices is not None:
+                    batch = pa.record_batch(
+                        [batch.column(i) for i in col_indices],
+                        schema=out_schema,
+                    )
+
+                # Serialize to IPC and write length-prefixed chunk
+                batch_rows = batch.num_rows
+                buf = io.BytesIO()
+                writer = ipc.new_stream(buf, out_schema)
+                writer.write_batch(batch)
+                writer.close()
+                chunk = buf.getvalue()
+                buf.close()
+                del buf, writer, batch
+
+                self.write(struct.pack("<I", len(chunk)))
+                self.write(chunk)
+                self.flush()
+                del chunk
+
+                rows_sent += batch_rows
+
+            # End marker
+            self.write(struct.pack("<I", 0))
             self.flush()
-
-            rows_sent += batch.num_rows
-
-        # End marker
-        self.write(struct.pack("<I", 0))
-        self.flush()
-        self.finish()
+            self.finish()
+        finally:
+            reader.close()
+            source.close()
 
 
 class SpoolRawHandler(JupyterHandler):
