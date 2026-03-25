@@ -56,6 +56,7 @@ interface PartDef {
   type: string;       // "arrow" | "json" | "error"
   title: string;
   arrow_url?: string;
+  spool_id?: string;
   rows?: number;
   columns?: { name: string; type: string }[];
   geometry_columns?: GeometryColumnMeta[];
@@ -356,7 +357,9 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
     if (metadata.query_id) newIds.push(metadata.query_id);
     if (metadata.parts) {
       for (const p of metadata.parts) {
-        if (p.arrow_url) {
+        if (p.spool_id) {
+          newIds.push(p.spool_id);
+        } else if (p.arrow_url) {
           try { const u = new URL(p.arrow_url); const q = u.searchParams.get('q'); if (q) newIds.push(q); } catch {}
         }
       }
@@ -410,8 +413,9 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
           fetch(buildSpoolUrl('delete', id, { kernelBaseUrl: baseUrl, dir }), getSpoolMutatingFetchInit('DELETE')).catch(() => {});
         }
       }
-      // Auto-pin new results if this cell was previously pinned
-      if (this._isPinned && baseUrl && newIds.length > 0 && dir) {
+      // Auto-pin new results if this cell was previously pinned and was re-run
+      // (oldQueryIds non-empty means cell re-run; empty means page reload — skip re-pin)
+      if (this._isPinned && baseUrl && newIds.length > 0 && dir && oldQueryIds.length > 0) {
         for (const id of newIds) {
           if (!_pinnedQueryIds.has(id)) {
             _pinnedQueryIds.add(id);
@@ -752,8 +756,9 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
 
       // Pin/Unpin toggle button
       const pinBtn = this._createPinButton(() => {
+        if (part.spool_id) return part.spool_id;
         try {
-          const u = new URL(part.arrow_url!);
+          const u = new URL(part.arrow_url!, window.location.origin);
           return u.searchParams.get('q');
         } catch { return null; }
       });
@@ -1086,8 +1091,9 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
 
         // Pin/Unpin toggle button
         const pinBtn = this._createPinButton(() => {
+          if (metadata.query_id) return metadata.query_id;
           try {
-            const u = new URL(metadata.arrow_url!);
+            const u = new URL(metadata.arrow_url!, window.location.origin);
             return u.searchParams.get('q');
           } catch { return null; }
         });

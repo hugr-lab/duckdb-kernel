@@ -7,7 +7,7 @@ require (
 	github.com/duckdb/duckdb-go/v2 v2.10501.0
 	github.com/go-zeromq/zmq4 v0.17.0
 	github.com/google/uuid v1.6.0
-	github.com/hugr-lab/query-engine/types v0.3.9
+	github.com/hugr-lab/query-engine/types v0.3.10
 	github.com/olekukonko/tablewriter v1.1.3
 )
 

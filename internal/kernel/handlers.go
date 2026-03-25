@@ -40,7 +40,9 @@ func (k *Kernel) handleShellMessage(ctx context.Context, msg *Message) {
 	case "comm_open":
 		k.handleCommOpen(msg)
 	case "comm_msg":
-		// Silently ignore comm messages — no comms registered.
+		k.handleCommMsg(msg)
+	case "comm_close":
+		k.handleCommClose(msg)
 	default:
 		log.Printf("unhandled shell message type: %s", msg.Header.MsgType)
 	}
@@ -375,10 +377,16 @@ func (k *Kernel) handleHistoryRequest(msg *Message) {
 }
 
 func (k *Kernel) handleCommInfoRequest(msg *Message) {
+	comms := make(map[string]any)
+	for commID, targetName := range k.openComms {
+		comms[commID] = map[string]any{
+			"target_name": targetName,
+		}
+	}
 	reply := NewMessage(msg, "comm_info_reply")
 	reply.Content = map[string]any{
 		"status": "ok",
-		"comms":  map[string]any{},
+		"comms":  comms,
 	}
 	if err := k.sendMessage(k.shellSocket, reply); err != nil {
 		log.Printf("send comm_info_reply error: %v", err)
@@ -386,11 +394,51 @@ func (k *Kernel) handleCommInfoRequest(msg *Message) {
 }
 
 func (k *Kernel) handleCommOpen(msg *Message) {
-	// No comms supported — send comm_close to signal rejection.
 	commID, _ := msg.Content["comm_id"].(string)
 	if commID == "" {
 		return
 	}
+	targetName, _ := msg.Content["target_name"].(string)
+	// Accept if target is registered, otherwise reject.
+	// Per Jupyter protocol: no reply needed on accept — comm is implicitly open.
+	if _, ok := k.commTargets[targetName]; ok {
+		k.openComms[commID] = targetName
+		return
+	}
+
+	// Unknown target — reject by sending comm_close.
+	reply := NewMessage(msg, "comm_close")
+	reply.Content = map[string]any{
+		"comm_id": commID,
+	}
+	if err := k.sendMessage(k.iopubSocket, reply); err != nil {
+		log.Printf("send comm_close error: %v", err)
+	}
+}
+
+func (k *Kernel) handleCommMsg(msg *Message) {
+	commID, _ := msg.Content["comm_id"].(string)
+	if commID == "" {
+		return
+	}
+	targetName, ok := k.openComms[commID]
+	if !ok {
+		return
+	}
+	handler, ok := k.commTargets[targetName]
+	if !ok {
+		return
+	}
+	data, _ := msg.Content["data"].(map[string]any)
+	handler(commID, data, msg)
+}
+
+func (k *Kernel) handleCommClose(msg *Message) {
+	commID, _ := msg.Content["comm_id"].(string)
+	if commID == "" {
+		return
+	}
+	delete(k.openComms, commID)
 	reply := NewMessage(msg, "comm_close")
 	reply.Content = map[string]any{
 		"comm_id": commID,

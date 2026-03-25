@@ -10,7 +10,7 @@
 
 import { Widget } from '@lumino/widgets';
 import { LabIcon } from '@jupyterlab/ui-components';
-import { IntrospectClient } from './introspectClient.js';
+import type { IIntrospectClient } from './introspectClient.js';
 
 /* ========== icons ========== */
 
@@ -382,7 +382,7 @@ function showAsyncKVModal(title: string, loader: () => Promise<Record<string, an
 /* ========== main widget ========== */
 
 export class DuckDBSidebarWidget extends Widget {
-  private client: IntrospectClient | null = null;
+  private client: IIntrospectClient | null = null;
   private sections: Map<string, HTMLElement> = new Map();
 
   constructor() {
@@ -396,7 +396,7 @@ export class DuckDBSidebarWidget extends Widget {
       '<div class="hugr-sidebar-placeholder">No active DuckDB kernel</div>';
   }
 
-  setClient(client: IntrospectClient | null): void {
+  setClient(client: IIntrospectClient | null): void {
     this.client = client;
     void this.refresh();
   }
