@@ -3,6 +3,42 @@
 Manual verification after publishing a new release.
 Run on a clean environment (not your dev setup).
 
+## 0. Clean Up Before Testing
+
+Remove any dev-installed extensions and kernel so the test is clean.
+
+### Remove JupyterLab dev extensions
+
+```bash
+# Uninstall editable dev extensions from the dev venv
+source .venv/bin/activate
+pip uninstall hugr-perspective-viewer hugr-duckdb-explorer -y
+jupyter labextension list   # should NOT show @hugr-lab/*
+```
+
+### Remove VS Code dev extension
+
+```bash
+# Disable/uninstall the locally-built extension
+code --uninstall-extension hugr-lab.hugr-result-renderer
+# Or if using dev build, remove the output manually:
+# rm -rf extensions/vscode/out/
+```
+
+### Remove release kernel (keep duckdb-dev for development)
+
+```bash
+# macOS
+rm -rf ~/Library/Jupyter/kernels/duckdb
+
+# Linux
+rm -rf ~/.local/share/jupyter/kernels/duckdb
+```
+
+Note: `duckdb-dev` kernel is your dev setup (symlinks) — don't touch it.
+
+---
+
 ## 1. Kernel Installation
 
 ### Via install script (Linux/macOS)
@@ -12,6 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/hugr-lab/duckdb-kernel/main/install
 ```
 
 Verify:
+
 ```bash
 jupyter kernelspec list | grep duckdb
 ls ~/Library/Jupyter/kernels/duckdb/          # macOS
@@ -22,7 +59,7 @@ Expected: `duckdb-kernel` binary, `kernel.json`, logos, `static/perspective/` di
 
 ### Via VS Code extension
 
-1. Install VSIX from Marketplace or `code --install-extension hugr-result-renderer.vsix`
+1. Install from Marketplace: search "HUGR Result Viewer"
 2. Open DuckDB Explorer sidebar → click "Install / Update DuckDB Kernel"
 3. Verify kernel installed (notification + sidebar shows "Session" info after restart)
 
@@ -31,38 +68,38 @@ Expected: `duckdb-kernel` binary, `kernel.json`, logos, `static/perspective/` di
 ## 2. JupyterLab (clean venv)
 
 ```bash
-# Create clean environment
+# Create clean test environment (separate from dev .venv)
 python3 -m venv /tmp/test-duckdb-kernel
 source /tmp/test-duckdb-kernel/bin/activate
 
-# Install JupyterLab + extensions
+# Install JupyterLab + extensions from PyPI
 pip install jupyterlab
 pip install hugr-perspective-viewer hugr-duckdb-explorer
 
 # Verify extensions
-jupyter labextension list    # should show @hugr-lab/perspective-viewer, @hugr-lab/duckdb-explorer
-jupyter server extension list  # should show hugr_perspective
+jupyter labextension list      # @hugr-lab/perspective-viewer, @hugr-lab/duckdb-explorer
+jupyter server extension list  # hugr_perspective
 
-# Install kernel (if not already installed via install.sh)
+# Install kernel (if not already via install.sh)
 curl -fsSL https://raw.githubusercontent.com/hugr-lab/duckdb-kernel/main/install.sh | bash
 
 # Start JupyterLab
 jupyter lab
 ```
 
-### Test cases
+### Test cases (JupyterLab)
 
 - [ ] Create notebook, select DuckDB kernel
 - [ ] `SELECT 1` → Perspective table renders
 - [ ] `INSTALL spatial;` → shows "Success (X ms)"
 - [ ] `SELECT * FROM duckdb_extensions()` → multipart tabs work
 - [ ] DuckDB Explorer sidebar shows schema tree (SESSION, CATALOG sections)
-- [ ] Sidebar works independently (schema tree populates after first query)
+- [ ] Sidebar works independently (populates after first query)
 - [ ] Pin/unpin result → pin survives kernel restart
 - [ ] "Open in Tab" → result opens in separate JupyterLab tab
 - [ ] JSON result → tree/raw toggle works
 
-### Cleanup
+### Cleanup (JupyterLab)
 
 ```bash
 deactivate
@@ -73,12 +110,12 @@ rm -rf /tmp/test-duckdb-kernel
 
 ## 3. VS Code
 
-### Setup
+### Setup (VS Code)
 
-1. Install extension from Marketplace (or VSIX from release)
+1. Install extension from Marketplace (or `code --install-extension hugr-result-renderer.vsix`)
 2. Kernel should be available (installed via script or VS Code "Install DuckDB Kernel")
 
-### Test cases
+### Test cases (VS Code)
 
 - [ ] Create `.ipynb`, select DuckDB kernel
 - [ ] `SELECT 1` → Perspective table renders in cell output
@@ -107,7 +144,7 @@ pip install hugr-perspective-viewer hugr-duckdb-explorer
 
 ---
 
-## 5. Release Artifacts Checklist
+## 5. Release Artifacts
 
 Verify all artifacts present in GitHub Release:
 
@@ -122,3 +159,20 @@ Verify all artifacts present in GitHub Release:
 - [ ] `kernel.json`
 - [ ] `logo-32x32.png`, `logo-64x64.png`
 - [ ] `install.sh`
+
+---
+
+## 6. Restore Dev Environment
+
+After testing, restore your dev setup:
+
+```bash
+# Dev venv
+source .venv/bin/activate
+make install-jupyterlab   # re-install editable dev extensions
+make install-dev          # re-symlink dev kernel
+
+# VS Code — rebuild dev extension
+make build-vscode
+# Reload VS Code window
+```
