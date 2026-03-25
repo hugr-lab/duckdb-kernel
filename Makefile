@@ -1,6 +1,7 @@
 BINARY := duckdb-kernel
 BUILD_TAGS := duckdb_arrow
 KERNEL_DIR := $(HOME)/Library/Jupyter/kernels/duckdb
+PYTHON := .venv/bin/python
 
 .PHONY: build install clean test \
 	build-perspective-core build-jupyter build-vscode build-extensions \
@@ -35,11 +36,13 @@ build-perspective-core:
 # --- JupyterLab extensions ---
 
 build-jupyter: build-perspective-core
-	cd extensions/jupyter && jlpm install && jlpm build:prod
+	cd extensions/jupyter && jlpm install
+	cd extensions/jupyter/perspective-viewer && jlpm build:prod
+	cd extensions/jupyter/duckdb-explorer && jlpm build:prod
 
 install-jupyterlab: build-jupyter
-	uv pip install -e extensions/jupyter/perspective-viewer/ --python .venv/bin/python
-	uv pip install -e extensions/jupyter/duckdb-explorer/ --python .venv/bin/python
+	uv pip install -e extensions/jupyter/perspective-viewer/ --python $(PYTHON)
+	uv pip install -e extensions/jupyter/duckdb-explorer/ --python $(PYTHON)
 
 # --- VS Code extension ---
 
