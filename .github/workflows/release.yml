@@ -70,7 +70,7 @@ jobs:
           name: duckdb-kernel-${{ matrix.goos }}-${{ matrix.goarch }}
           path: duckdb-kernel-*
 
-  build-perspective-viewer:
+  build-extensions:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -90,21 +90,22 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           sed -i "s/^version = .*/version = \"$VERSION\"/" extensions/perspective-viewer/pyproject.toml
+          sed -i "s/^version = .*/version = \"$VERSION\"/" extensions/duckdb-explorer/pyproject.toml
+          cd extensions/vscode && npm pkg set version="$VERSION"
+
+      - name: Install workspace dependencies
+        working-directory: extensions
+        run: jlpm install
 
       - name: Build perspective-core
         working-directory: extensions/perspective-core
-        run: |
-          npm install --no-workspaces
-          npm run build
+        run: npm run build
 
       - name: Build perspective-viewer
         working-directory: extensions/perspective-viewer
-        run: |
-          rm -f ../package.json && touch ../yarn.lock
-          jlpm install
-          jlpm build:prod
+        run: jlpm build:prod
 
-      - name: Build Python wheel
+      - name: Build perspective-viewer wheel
         working-directory: extensions/perspective-viewer
         run: python -m build
 
@@ -113,86 +114,39 @@ jobs:
           tar -czf perspective-static.tar.gz \
             -C extensions/perspective-viewer/hugr_perspective/labextension/static perspective
 
-      - name: Upload wheel
+      - name: Build duckdb-explorer
+        working-directory: extensions/duckdb-explorer
+        run: jlpm build:prod
+
+      - name: Build duckdb-explorer wheel
+        working-directory: extensions/duckdb-explorer
+        run: python -m build
+
+      - name: Build VS Code extension
+        working-directory: extensions/vscode
+        run: npm run build
+
+      - name: Package VSIX
+        working-directory: extensions/vscode
+        run: npx @vscode/vsce package --no-dependencies -o hugr-result-renderer.vsix
+
+      - name: Upload perspective-viewer wheel
         uses: actions/upload-artifact@v4
         with:
           name: perspective-viewer-wheel
           path: extensions/perspective-viewer/dist/*.whl
+
+      - name: Upload duckdb-explorer wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: duckdb-explorer-wheel
+          path: extensions/duckdb-explorer/dist/*.whl
 
       - name: Upload perspective static files
         uses: actions/upload-artifact@v4
         with:
           name: perspective-static
           path: perspective-static.tar.gz
-
-  build-duckdb-explorer:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install build tools
-        run: pip install jupyterlab>=4.0.0 build
-
-      - name: Set version from tag
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          sed -i "s/^version = .*/version = \"$VERSION\"/" extensions/duckdb-explorer/pyproject.toml
-
-      - name: Build duckdb-explorer
-        working-directory: extensions/duckdb-explorer
-        run: |
-          rm -f ../package.json && touch ../yarn.lock
-          jlpm install
-          jlpm build:prod
-
-      - name: Build Python wheel
-        working-directory: extensions/duckdb-explorer
-        run: python -m build
-
-      - name: Upload wheel
-        uses: actions/upload-artifact@v4
-        with:
-          name: duckdb-explorer-wheel
-          path: extensions/duckdb-explorer/dist/*.whl
-
-  build-vscode:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
-      - name: Set version from tag
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          cd extensions/vscode
-          npm pkg set version="$VERSION"
-
-      - name: Build perspective-core
-        working-directory: extensions/perspective-core
-        run: |
-          npm install --no-workspaces
-          npm run build
-
-      - name: Build VS Code extension
-        working-directory: extensions/vscode
-        run: |
-          npm install --no-workspaces
-          npm run build
-
-      - name: Package VSIX
-        working-directory: extensions/vscode
-        run: npx @vscode/vsce package --no-dependencies -o hugr-result-renderer.vsix
 
       - name: Upload VSIX
         uses: actions/upload-artifact@v4
@@ -201,7 +155,7 @@ jobs:
           path: extensions/vscode/hugr-result-renderer.vsix
 
   publish-pypi:
-    needs: [build-perspective-viewer, build-duckdb-explorer]
+    needs: build-extensions
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -221,7 +175,7 @@ jobs:
           skip-existing: true
 
   publish-vscode:
-    needs: build-vscode
+    needs: build-extensions
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -236,7 +190,7 @@ jobs:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
   release:
-    needs: [build, build-perspective-viewer, build-duckdb-explorer, build-vscode]
+    needs: [build, build-extensions]
     runs-on: ubuntu-latest
 
     steps:
