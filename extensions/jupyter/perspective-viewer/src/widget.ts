@@ -48,6 +48,7 @@ interface FlatMetadata {
   data_size_bytes?: number;
   query_time_ms?: number;
   transfer_time_ms?: number;
+  pin_disabled?: boolean;
 }
 
 /** A single result part in multipart response. */
@@ -64,6 +65,7 @@ interface PartDef {
   data_size_bytes?: number;
   data?: any;
   errors?: { message: string; path?: string[]; extensions?: any }[];
+  pin_disabled?: boolean;
 }
 
 /** Full multipart metadata from hugr-kernel. */
@@ -754,15 +756,17 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
       });
       banner.appendChild(openTabBtn);
 
-      // Pin/Unpin toggle button
-      const pinBtn = this._createPinButton(() => {
-        if (part.spool_id) return part.spool_id;
-        try {
-          const u = new URL(part.arrow_url!, window.location.origin);
-          return u.searchParams.get('q');
-        } catch { return null; }
-      });
-      banner.appendChild(pinBtn);
+      // Pin/Unpin toggle button (hidden when pin_disabled on part)
+      if (!part.pin_disabled) {
+        const pinBtn = this._createPinButton(() => {
+          if (part.spool_id) return part.spool_id;
+          try {
+            const u = new URL(part.arrow_url!, window.location.origin);
+            return u.searchParams.get('q');
+          } catch { return null; }
+        });
+        banner.appendChild(pinBtn);
+      }
 
       container.appendChild(banner);
     }
@@ -1089,15 +1093,17 @@ export class HugrResultWidget extends Widget implements IRenderMime.IRenderer {
         });
         banner.appendChild(openTabBtn);
 
-        // Pin/Unpin toggle button
-        const pinBtn = this._createPinButton(() => {
-          if (metadata.query_id) return metadata.query_id;
-          try {
-            const u = new URL(metadata.arrow_url!, window.location.origin);
-            return u.searchParams.get('q');
-          } catch { return null; }
-        });
-        banner.appendChild(pinBtn);
+        // Pin/Unpin toggle button (hidden when pin_disabled in metadata)
+        if (!metadata.pin_disabled) {
+          const pinBtn = this._createPinButton(() => {
+            if (metadata.query_id) return metadata.query_id;
+            try {
+              const u = new URL(metadata.arrow_url!, window.location.origin);
+              return u.searchParams.get('q');
+            } catch { return null; }
+          });
+          banner.appendChild(pinBtn);
+        }
 
         this.node.appendChild(banner);
       }
