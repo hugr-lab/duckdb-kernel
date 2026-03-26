@@ -129,7 +129,7 @@ function parseTruncation(arrowUrl: string): {
   total: number;
 } {
   try {
-    const url = new URL(arrowUrl);
+    const url = new URL(arrowUrl, window.location.origin);
     const limit = parseInt(url.searchParams.get('limit') ?? '0', 10);
     const total = parseInt(url.searchParams.get('total') ?? '0', 10);
     if (limit > 0 && total > limit) {
@@ -200,7 +200,7 @@ function rebuildArrowUrl(oldUrl: string, baseUrl?: string): string {
 function resolveArrowUrl(arrowUrl: string): string {
   if (!hasSpoolProxy()) return arrowUrl;
   try {
-    const url = new URL(arrowUrl);
+    const url = new URL(arrowUrl, window.location.origin);
     const queryId = url.searchParams.get('q');
     if (!queryId) return arrowUrl;
     return buildArrowStreamUrl(queryId, {
@@ -209,7 +209,8 @@ function resolveArrowUrl(arrowUrl: string): string {
       total: url.searchParams.has('total') ? Number(url.searchParams.get('total')) : undefined,
       columns: url.searchParams.has('columns') ? url.searchParams.get('columns')!.split(',') : undefined,
     });
-  } catch {
+  } catch (e) {
+    console.warn('[Perspective Viewer] Failed to resolve Arrow URL:', arrowUrl, e);
     return arrowUrl;
   }
 }
