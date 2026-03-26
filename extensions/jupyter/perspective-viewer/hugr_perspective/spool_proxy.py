@@ -28,10 +28,20 @@ from jupyter_server.utils import url_path_join
 GEO_PLACEHOLDER = "{geometry}"
 
 # Kernel spool directories under system temp
+# Extra dirs can be added via HUGR_SPOOL_EXTRA_DIRS env (comma-separated, name:dir or just name)
 KERNEL_SPOOL_DIRS = {
     "hugr-kernel": "hugr-kernel",
     "duckdb-kernel": "duckdb-kernel",
 }
+_extra = os.environ.get("HUGR_SPOOL_EXTRA_DIRS", "")
+if _extra:
+    for entry in _extra.split(","):
+        entry = entry.strip()
+        if ":" in entry:
+            name, dirname = entry.split(":", 1)
+            KERNEL_SPOOL_DIRS[name.strip()] = dirname.strip()
+        elif entry:
+            KERNEL_SPOOL_DIRS[entry] = entry
 
 # Pin result subdirectory names per kernel type
 KERNEL_PIN_DIRS = {
