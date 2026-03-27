@@ -255,13 +255,9 @@ export function activate(context: vscode.ExtensionContext) {
     rendererMessaging.onDidReceiveMessage((e) => {
       const msg = e.message as any;
       if (msg?.type === 'open-in-tab' && msg.arrow_url && msg.base_url) {
-        // Use the most recent known base_url (handles kernel restart with new port)
+        // Renderer sends the latest _lastKnownBaseUrl which is updated on each
+        // execute result — trust it over the saved notebookClients entry.
         let baseUrl = msg.base_url;
-        const activeNotebook = vscode.window.activeNotebookEditor?.notebook;
-        if (activeNotebook) {
-          const entry = notebookClients.get(activeNotebook.uri.toString());
-          if (entry?.url) baseUrl = entry.url;
-        }
         // Rebuild arrow_url with current base_url
         let arrowUrl = msg.arrow_url;
         try {
