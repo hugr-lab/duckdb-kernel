@@ -17,7 +17,12 @@ func ConvertBatch(
 	geoType GeoType,
 	mem memory.Allocator,
 ) (arrow.RecordBatch, GeoType, error) {
-	binArr, ok := rec.Column(col.Index).(*array.Binary)
+	colArr := rec.Column(col.Index)
+	// Unwrap extension type to get underlying storage array
+	if extArr, ok := colArr.(array.ExtensionArray); ok {
+		colArr = extArr.Storage()
+	}
+	binArr, ok := colArr.(*array.Binary)
 	if !ok {
 		// Try LargeBinary
 		return rec, geoType, nil

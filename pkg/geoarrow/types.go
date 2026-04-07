@@ -80,18 +80,26 @@ type GeometryColumn struct {
 func DetectGeometryColumns(schema *arrow.Schema) []GeometryColumn {
 	var cols []GeometryColumn
 	for i, f := range schema.Fields() {
-		if f.Metadata.Len() == 0 {
-			continue
-		}
-		idx := f.Metadata.FindKey("ARROW:extension:name")
-		if idx < 0 {
-			continue
-		}
-		ext := f.Metadata.Values()[idx]
-		// Read original extension metadata (contains srid etc.)
+		// Try field metadata first
+		ext := ""
 		extMeta := ""
-		if mi := f.Metadata.FindKey("ARROW:extension:metadata"); mi >= 0 {
-			extMeta = f.Metadata.Values()[mi]
+		if f.Metadata.Len() > 0 {
+			if idx := f.Metadata.FindKey("ARROW:extension:name"); idx >= 0 {
+				ext = f.Metadata.Values()[idx]
+			}
+			if mi := f.Metadata.FindKey("ARROW:extension:metadata"); mi >= 0 {
+				extMeta = f.Metadata.Values()[mi]
+			}
+		}
+		// Fallback: check registered Arrow extension type
+		if ext == "" {
+			if et, ok := f.Type.(arrow.ExtensionType); ok {
+				ext = et.ExtensionName()
+				extMeta = string(et.Serialize())
+			}
+		}
+		if ext == "" {
+			continue
 		}
 		srid := parseSRID(extMeta)
 
